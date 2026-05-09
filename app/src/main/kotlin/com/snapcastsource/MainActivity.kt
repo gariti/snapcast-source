@@ -1,6 +1,7 @@
 package com.snapcastsource
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -29,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -40,10 +42,21 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 
+private const val PREFS_NAME = "snapcast_source_prefs"
+private const val KEY_SLOT = "slot_index"
+private const val KEY_HOST = "host"
+
+val SLOT_PORTS = listOf(4953, 4954, 4955, 4956)
+
+fun portToSlot(port: Int): Int? {
+    val idx = SLOT_PORTS.indexOf(port)
+    return if (idx >= 0) idx + 1 else null
+}
+
 class MainActivity : ComponentActivity() {
 
     private var pendingHost: String = ""
-    private var pendingPort: Int = 4953
+    private var pendingPort: Int = SLOT_PORTS[0]
 
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -71,10 +84,22 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val initialSlotIdx = prefs.getInt(KEY_SLOT, 0).coerceIn(0, SLOT_PORTS.size - 1)
+        val initialHost = prefs.getString(KEY_HOST, "192.168.0.163") ?: "192.168.0.163"
+
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     SnapcastSourceScreen(
+                        initialHost = initialHost,
+                        initialSlotIndex = initialSlotIdx,
+                        onSlotChange = { idx ->
+                            prefs.edit().putInt(KEY_SLOT, idx).apply()
+                        },
+                        onHostChange = { host ->
+                            prefs.edit().putString(KEY_HOST, host).apply()
+                        },
                         onStart = ::startCapture,
                         onStop = ::stopCapture
                     )
@@ -97,13 +122,19 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun SnapcastSourceScreen(
+    initialHost: String,
+    initialSlotIndex: Int,
+    onSlotChange: (Int) -> Unit,
+    onHostChange: (String) -> Unit,
     onStart: (String, Int) -> Unit,
     onStop: () -> Unit
 ) {
-    var host by remember { mutableStateOf("192.168.0.163") }
-    var portText by remember { mutableStateOf("4953") }
+    var host by remember { mutableStateOf(initialHost) }
+    var slotIndex by remember { mutableIntStateOf(initialSlotIndex) }
 
     val state by AudioCaptureService.state.collectAsState()
+    val streaming = state !is ConnectionState.Idle && state !is ConnectionState.Failed
+    val editable = !streaming
 
     Column(
         modifier = Modifier
@@ -119,27 +150,34 @@ fun SnapcastSourceScreen(
 
         OutlinedTextField(
             value = host,
-            onValueChange = { host = it },
+            onValueChange = {
+                host = it
+                onHostChange(it)
+            },
             label = { Text("Snapserver host") },
             singleLine = true,
-            enabled = state is ConnectionState.Idle || state is ConnectionState.Failed,
+            enabled = editable,
             modifier = Modifier.fillMaxWidth()
         )
 
-        OutlinedTextField(
-            value = portText,
-            onValueChange = { portText = it.filter(Char::isDigit) },
-            label = { Text("Port") },
-            singleLine = true,
-            enabled = state is ConnectionState.Idle || state is ConnectionState.Failed,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        val streaming = state !is ConnectionState.Idle && state !is ConnectionState.Failed
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "Slot (party-mode lane)",
+                style = MaterialTheme.typography.labelMedium
+            )
+            SlotPicker(
+                selectedIndex = slotIndex,
+                enabled = editable,
+                onSelect = {
+                    slotIndex = it
+                    onSlotChange(it)
+                }
+            )
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(
-                onClick = { onStart(host, portText.toIntOrNull() ?: 4953) },
+                onClick = { onStart(host, SLOT_PORTS[slotIndex]) },
                 enabled = !streaming
             ) { Text("Start") }
 
@@ -150,6 +188,35 @@ fun SnapcastSourceScreen(
         }
 
         StatusCard(state)
+    }
+}
+
+@Composable
+fun SlotPicker(
+    selectedIndex: Int,
+    enabled: Boolean,
+    onSelect: (Int) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        SLOT_PORTS.forEachIndexed { idx, port ->
+            val selected = idx == selectedIndex
+            if (selected) {
+                Button(
+                    onClick = { onSelect(idx) },
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f)
+                ) { Text("${idx + 1}") }
+            } else {
+                OutlinedButton(
+                    onClick = { onSelect(idx) },
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f)
+                ) { Text("${idx + 1}") }
+            }
+        }
     }
 }
 
@@ -187,10 +254,10 @@ fun StatusCard(state: ConnectionState) {
 
         when (state) {
             is ConnectionState.Connecting -> {
-                Text("→ ${state.host}:${state.port}", fontFamily = FontFamily.Monospace)
+                Text(targetLine(state.host, state.port), fontFamily = FontFamily.Monospace)
             }
             is ConnectionState.Connected -> {
-                Text("→ ${state.host}:${state.port}", fontFamily = FontFamily.Monospace)
+                Text(targetLine(state.host, state.port), fontFamily = FontFamily.Monospace)
                 Text(
                     "Sent: ${formatBytes(state.bytesSent)}",
                     fontFamily = FontFamily.Monospace
@@ -198,7 +265,7 @@ fun StatusCard(state: ConnectionState) {
                 AudioMeter(rms = state.rms)
             }
             is ConnectionState.Reconnecting -> {
-                Text("→ ${state.host}:${state.port}", fontFamily = FontFamily.Monospace)
+                Text(targetLine(state.host, state.port), fontFamily = FontFamily.Monospace)
                 Text(
                     "Last error: ${state.lastError}",
                     style = MaterialTheme.typography.bodySmall,
@@ -215,6 +282,11 @@ fun StatusCard(state: ConnectionState) {
             else -> { /* idle: no extra detail */ }
         }
     }
+}
+
+private fun targetLine(host: String, port: Int): String {
+    val slot = portToSlot(port)
+    return if (slot != null) "→ $host:$port (Slot $slot)" else "→ $host:$port"
 }
 
 @Composable
