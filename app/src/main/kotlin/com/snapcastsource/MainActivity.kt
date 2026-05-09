@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -45,8 +46,10 @@ import androidx.core.app.ActivityCompat
 private const val PREFS_NAME = "snapcast_source_prefs"
 private const val KEY_SLOT = "slot_index"
 private const val KEY_HOST = "host"
+private const val KEY_PARTY_MODE = "party_mode"
 
 val SLOT_PORTS = listOf(4953, 4954, 4955, 4956)
+const val VIZ_PORT = 4900
 
 fun portToSlot(port: Int): Int? {
     val idx = SLOT_PORTS.indexOf(port)
@@ -87,6 +90,7 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val initialSlotIdx = prefs.getInt(KEY_SLOT, 0).coerceIn(0, SLOT_PORTS.size - 1)
         val initialHost = prefs.getString(KEY_HOST, "192.168.0.163") ?: "192.168.0.163"
+        val initialPartyMode = prefs.getBoolean(KEY_PARTY_MODE, false)
 
         setContent {
             MaterialTheme {
@@ -94,11 +98,15 @@ class MainActivity : ComponentActivity() {
                     SnapcastSourceScreen(
                         initialHost = initialHost,
                         initialSlotIndex = initialSlotIdx,
+                        initialPartyMode = initialPartyMode,
                         onSlotChange = { idx ->
                             prefs.edit().putInt(KEY_SLOT, idx).apply()
                         },
                         onHostChange = { host ->
                             prefs.edit().putString(KEY_HOST, host).apply()
+                        },
+                        onPartyModeChange = { enabled ->
+                            prefs.edit().putBoolean(KEY_PARTY_MODE, enabled).apply()
                         },
                         onStart = ::startCapture,
                         onStop = ::stopCapture
@@ -124,13 +132,16 @@ class MainActivity : ComponentActivity() {
 fun SnapcastSourceScreen(
     initialHost: String,
     initialSlotIndex: Int,
+    initialPartyMode: Boolean,
     onSlotChange: (Int) -> Unit,
     onHostChange: (String) -> Unit,
+    onPartyModeChange: (Boolean) -> Unit,
     onStart: (String, Int) -> Unit,
     onStop: () -> Unit
 ) {
     var host by remember { mutableStateOf(initialHost) }
     var slotIndex by remember { mutableIntStateOf(initialSlotIndex) }
+    var partyMode by remember { mutableStateOf(initialPartyMode) }
 
     val state by AudioCaptureService.state.collectAsState()
     val streaming = state !is ConnectionState.Idle && state !is ConnectionState.Failed
@@ -160,24 +171,52 @@ fun SnapcastSourceScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                "Slot (party-mode lane)",
-                style = MaterialTheme.typography.labelMedium
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Party mode", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "broadcast to speakers",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+            Switch(
+                checked = partyMode,
+                onCheckedChange = {
+                    partyMode = it
+                    onPartyModeChange(it)
+                },
+                enabled = editable
             )
-            SlotPicker(
-                selectedIndex = slotIndex,
-                enabled = editable,
-                onSelect = {
-                    slotIndex = it
-                    onSlotChange(it)
-                }
-            )
+        }
+
+        if (partyMode) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Slot (party-mode lane)",
+                    style = MaterialTheme.typography.labelMedium
+                )
+                SlotPicker(
+                    selectedIndex = slotIndex,
+                    enabled = editable,
+                    onSelect = {
+                        slotIndex = it
+                        onSlotChange(it)
+                    }
+                )
+            }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(
-                onClick = { onStart(host, SLOT_PORTS[slotIndex]) },
+                onClick = {
+                    val port = if (partyMode) SLOT_PORTS[slotIndex] else VIZ_PORT
+                    onStart(host, port)
+                },
                 enabled = !streaming
             ) { Text("Start") }
 
@@ -285,6 +324,7 @@ fun StatusCard(state: ConnectionState) {
 }
 
 private fun targetLine(host: String, port: Int): String {
+    if (port == VIZ_PORT) return "→ $host:$port (Visualize)"
     val slot = portToSlot(port)
     return if (slot != null) "→ $host:$port (Slot $slot)" else "→ $host:$port"
 }
