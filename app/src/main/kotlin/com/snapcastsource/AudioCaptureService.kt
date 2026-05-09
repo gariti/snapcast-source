@@ -19,8 +19,12 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.sqrt
 
 class AudioCaptureService : LifecycleService() {
 
@@ -36,7 +40,7 @@ class AudioCaptureService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        intent ?: return stopAndReturn()
+        intent ?: return stopAndReturn("Missing intent")
 
         startInForeground()
 
@@ -46,14 +50,16 @@ class AudioCaptureService : LifecycleService() {
         val port = intent.getIntExtra("port", 4953)
 
         if (data == null || host.isNullOrBlank()) {
-            Log.e(TAG, "Missing projection data or host")
-            return stopAndReturn()
+            return stopAndReturn("Missing projection data or host")
         }
 
         val mpm = getSystemService(MediaProjectionManager::class.java)
         projection = mpm.getMediaProjection(resultCode, data).also {
             it.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() { stopSelf() }
+                override fun onStop() {
+                    publishState(ConnectionState.Failed("Screen capture permission revoked"))
+                    stopSelf()
+                }
             }, null)
         }
 
@@ -81,25 +87,58 @@ class AudioCaptureService : LifecycleService() {
         )
         val bufSize = (minBuf * 2).coerceAtLeast(8192)
 
-        val record = AudioRecord.Builder()
-            .setAudioPlaybackCaptureConfig(config)
-            .setAudioFormat(format)
-            .setBufferSizeInBytes(bufSize)
-            .build()
+        val record = try {
+            AudioRecord.Builder()
+                .setAudioPlaybackCaptureConfig(config)
+                .setAudioFormat(format)
+                .setBufferSizeInBytes(bufSize)
+                .build()
+        } catch (e: Exception) {
+            publishState(ConnectionState.Failed("AudioRecord init failed: ${e.message}"))
+            stopSelf()
+            return
+        }
         audioRecord = record
 
         val tcp = TcpStreamer(host, port)
         streamer = tcp
 
+        // Bridge TcpStreamer.state → service-level state flow
         captureJob = lifecycleScope.launch(Dispatchers.IO) {
+            launch { tcp.state.collect { _state.value = it } }
+
             val buf = ByteArray(bufSize)
             record.startRecording()
             tcp.connect()
             while (isActive) {
                 val n = record.read(buf, 0, buf.size)
-                if (n > 0) tcp.write(buf, n)
+                if (n > 0) {
+                    val rms = computeRms(buf, n)
+                    tcp.write(buf, n, rms)
+                }
             }
         }
+    }
+
+    private fun computeRms(buf: ByteArray, len: Int): Float {
+        // 16-bit little-endian PCM stereo. Normalize to 0..1.
+        var sumSq = 0.0
+        var samples = 0
+        var i = 0
+        while (i < len - 1) {
+            val sample = (buf[i].toInt() and 0xFF) or (buf[i + 1].toInt() shl 8)
+            val signed = if (sample > 32767) sample - 65536 else sample
+            sumSq += signed.toDouble() * signed.toDouble()
+            samples++
+            i += 2
+        }
+        if (samples == 0) return 0f
+        val rms = sqrt(sumSq / samples)
+        return (rms / 32768.0).toFloat().coerceIn(0f, 1f)
+    }
+
+    private fun publishState(s: ConnectionState) {
+        _state.value = s
     }
 
     override fun onDestroy() {
@@ -111,6 +150,9 @@ class AudioCaptureService : LifecycleService() {
         streamer = null
         projection?.stop()
         projection = null
+        if (_state.value !is ConnectionState.Failed) {
+            _state.value = ConnectionState.Idle
+        }
         super.onDestroy()
     }
 
@@ -119,7 +161,8 @@ class AudioCaptureService : LifecycleService() {
         return null
     }
 
-    private fun stopAndReturn(): Int {
+    private fun stopAndReturn(reason: String): Int {
+        publishState(ConnectionState.Failed(reason))
         stopSelf()
         return START_NOT_STICKY
     }
@@ -157,5 +200,10 @@ class AudioCaptureService : LifecycleService() {
         const val SAMPLE_RATE = 48000
         const val NOTIF_ID = 42
         const val CHANNEL_ID = "snapcast_source"
+
+        // Service-singleton state flow so MainActivity can observe even after
+        // process recreation. Service is the producer; nobody else writes here.
+        private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
+        val state: StateFlow<ConnectionState> = _state.asStateFlow()
     }
 }
