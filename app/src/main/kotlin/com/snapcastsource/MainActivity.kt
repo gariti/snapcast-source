@@ -14,14 +14,21 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -29,11 +36,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +51,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val PREFS_NAME = "snapcast_source_prefs"
 private const val KEY_SLOT = "slot_index"
@@ -147,9 +159,68 @@ fun SnapcastSourceScreen(
     val streaming = state !is ConnectionState.Idle && state !is ConnectionState.Failed
     val editable = !streaming
 
+    val scope = rememberCoroutineScope()
+    var snapStatus by remember { mutableStateOf<SnapStatus?>(null) }
+    var snapError by remember { mutableStateOf<String?>(null) }
+    var snapLoading by remember { mutableStateOf(false) }
+
+    fun refreshClients() {
+        if (host.isBlank()) return
+        snapLoading = true
+        scope.launch {
+            try {
+                val s = withContext(Dispatchers.IO) { SnapcastRpc(host).getStatus() }
+                snapStatus = s
+                snapError = null
+            } catch (e: Exception) {
+                snapError = e.message ?: "Failed to talk to snapserver"
+            } finally {
+                snapLoading = false
+            }
+        }
+    }
+
+    fun setClientStream(client: SnapClient, streamId: String) {
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    SnapcastRpc(host).setGroupStream(client.groupId, streamId)
+                }
+                snapStatus = snapStatus?.copy(
+                    clients = snapStatus!!.clients.map {
+                        if (it.groupId == client.groupId) it.copy(streamId = streamId) else it
+                    }
+                )
+            } catch (e: Exception) {
+                snapError = e.message ?: "Failed to set stream"
+            }
+        }
+    }
+
+    fun toggleClientMute(client: SnapClient) {
+        val newMuted = !client.muted
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    SnapcastRpc(host).setClientMute(client.id, newMuted, client.volumePercent)
+                }
+                snapStatus = snapStatus?.copy(
+                    clients = snapStatus!!.clients.map {
+                        if (it.id == client.id) it.copy(muted = newMuted) else it
+                    }
+                )
+            } catch (e: Exception) {
+                snapError = e.message ?: "Failed to mute client"
+            }
+        }
+    }
+
+    LaunchedEffect(host) { refreshClients() }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -227,6 +298,145 @@ fun SnapcastSourceScreen(
         }
 
         StatusCard(state)
+
+        ClientsCard(
+            status = snapStatus,
+            error = snapError,
+            loading = snapLoading,
+            onRefresh = ::refreshClients,
+            onSetStream = ::setClientStream,
+            onToggleMute = ::toggleClientMute
+        )
+    }
+}
+
+@Composable
+fun ClientsCard(
+    status: SnapStatus?,
+    error: String?,
+    loading: Boolean,
+    onRefresh: () -> Unit,
+    onSetStream: (SnapClient, String) -> Unit,
+    onToggleMute: (SnapClient) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Clients", style = MaterialTheme.typography.titleMedium)
+            OutlinedButton(onClick = onRefresh, enabled = !loading) {
+                Text(if (loading) "Loading…" else "Refresh")
+            }
+        }
+
+        if (error != null) {
+            Text(
+                error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
+        val clients = status?.clients
+        val streams = status?.streamIds ?: emptyList()
+
+        when {
+            status == null && !loading && error == null ->
+                Text(
+                    "Set the host above to load clients.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            clients != null && clients.isEmpty() ->
+                Text(
+                    "No snapclients connected to this server.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            clients != null -> clients.forEach { client ->
+                ClientRow(
+                    client = client,
+                    streams = streams,
+                    onSetStream = { sid -> onSetStream(client, sid) },
+                    onToggleMute = { onToggleMute(client) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ClientRow(
+    client: SnapClient,
+    streams: List<String>,
+    onSetStream: (String) -> Unit,
+    onToggleMute: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(if (client.connected) Color(0xFF4CAF50) else Color(0xFF888888))
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    client.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (client.connected) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.outline
+                    }
+                )
+            }
+            OutlinedButton(
+                onClick = onToggleMute,
+                colors = if (client.muted) {
+                    ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                } else {
+                    ButtonDefaults.outlinedButtonColors()
+                }
+            ) {
+                Text(if (client.muted) "Muted" else "Audible")
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            streams.forEach { sid ->
+                val selected = sid == client.streamId
+                if (selected) {
+                    Button(
+                        onClick = { onSetStream(sid) },
+                        modifier = Modifier.weight(1f)
+                    ) { Text(sid) }
+                } else {
+                    OutlinedButton(
+                        onClick = { onSetStream(sid) },
+                        modifier = Modifier.weight(1f)
+                    ) { Text(sid) }
+                }
+            }
+        }
     }
 }
 
