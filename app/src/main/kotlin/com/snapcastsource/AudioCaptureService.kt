@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
@@ -103,6 +104,9 @@ class AudioCaptureService : LifecycleService() {
         val tcp = TcpStreamer(host, port)
         streamer = tcp
 
+        val audioManager = getSystemService(AudioManager::class.java)
+        val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+
         // Bridge TcpStreamer.state → service-level state flow
         captureJob = lifecycleScope.launch(Dispatchers.IO) {
             launch { tcp.state.collect { _state.value = it } }
@@ -113,10 +117,29 @@ class AudioCaptureService : LifecycleService() {
             while (isActive) {
                 val n = record.read(buf, 0, buf.size)
                 if (n > 0) {
+                    val gain = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maxVol
+                    applyGain(buf, n, gain)
                     val rms = computeRms(buf, n)
                     tcp.write(buf, n, rms)
                 }
             }
+        }
+    }
+
+    private fun applyGain(buf: ByteArray, len: Int, gain: Float) {
+        if (gain >= 0.999f) return
+        if (gain <= 0f) {
+            for (i in 0 until len) buf[i] = 0
+            return
+        }
+        var i = 0
+        while (i < len - 1) {
+            val raw = (buf[i].toInt() and 0xFF) or (buf[i + 1].toInt() shl 8)
+            val signed = if (raw > 32767) raw - 65536 else raw
+            val scaled = (signed * gain).toInt().coerceIn(-32768, 32767)
+            buf[i] = (scaled and 0xFF).toByte()
+            buf[i + 1] = ((scaled shr 8) and 0xFF).toByte()
+            i += 2
         }
     }
 
