@@ -1,4 +1,4 @@
-package com.snapcastsource
+package com.slowshell.app
 
 sealed class ConnectionState {
     object Idle : ConnectionState()

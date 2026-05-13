@@ -5,15 +5,15 @@ plugins {
 }
 
 android {
-    namespace = "com.snapcastsource"
+    namespace = "com.slowshell.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.snapcastsource"
+        applicationId = "com.slowshell.app"
         minSdk = 29
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildTypes {
@@ -52,4 +52,5 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.jtransforms)
 }

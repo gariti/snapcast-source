@@ -1,8 +1,9 @@
-package com.snapcastsource
+package com.slowshell.app
 
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
@@ -29,8 +30,11 @@ import kotlin.math.sqrt
 
 class AudioCaptureService : LifecycleService() {
 
+    enum class Mode { PARTY, SOLO }
+
     private var audioRecord: AudioRecord? = null
     private var streamer: TcpStreamer? = null
+    private var spectrumSink: SpectrumUdpSink? = null
     private var projection: MediaProjection? = null
     private var captureJob: Job? = null
 
@@ -49,6 +53,7 @@ class AudioCaptureService : LifecycleService() {
         val data: Intent? = intent.getParcelableExtra("data")
         val host = intent.getStringExtra("host")
         val port = intent.getIntExtra("port", 4953)
+        val mode = if (intent.getStringExtra("mode") == "solo") Mode.SOLO else Mode.PARTY
 
         if (data == null || host.isNullOrBlank()) {
             return stopAndReturn("Missing projection data or host")
@@ -64,11 +69,11 @@ class AudioCaptureService : LifecycleService() {
             }, null)
         }
 
-        startCapture(projection!!, host, port)
+        startCapture(projection!!, mode, host, port)
         return START_NOT_STICKY
     }
 
-    private fun startCapture(projection: MediaProjection, host: String, port: Int) {
+    private fun startCapture(projection: MediaProjection, mode: Mode, host: String, port: Int) {
         val config = AudioPlaybackCaptureConfiguration.Builder(projection)
             .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
             .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -101,13 +106,26 @@ class AudioCaptureService : LifecycleService() {
         }
         audioRecord = record
 
-        val tcp = TcpStreamer(host, port)
-        streamer = tcp
-
         val audioManager = getSystemService(AudioManager::class.java)
         val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
 
-        // Bridge TcpStreamer.state → service-level state flow
+        when (mode) {
+            Mode.PARTY -> startPartyCapture(record, audioManager, maxVol, host, port, bufSize)
+            Mode.SOLO -> startSoloCapture(record, host, port, bufSize)
+        }
+    }
+
+    private fun startPartyCapture(
+        record: AudioRecord,
+        audioManager: AudioManager,
+        maxVol: Int,
+        host: String,
+        port: Int,
+        bufSize: Int,
+    ) {
+        val tcp = TcpStreamer(host, port)
+        streamer = tcp
+
         captureJob = lifecycleScope.launch(Dispatchers.IO) {
             launch { tcp.state.collect { _state.value = it } }
 
@@ -121,6 +139,43 @@ class AudioCaptureService : LifecycleService() {
                     applyGain(buf, n, gain)
                     val rms = computeRms(buf, n)
                     tcp.write(buf, n, rms)
+                }
+            }
+        }
+    }
+
+    private fun startSoloCapture(
+        record: AudioRecord,
+        host: String,
+        port: Int,
+        bufSize: Int,
+    ) {
+        val sink = SpectrumUdpSink(host, port)
+        spectrumSink = sink
+        val pipeline = SpectrumPipeline(sampleRateHz = SAMPLE_RATE)
+
+        captureJob = lifecycleScope.launch(Dispatchers.IO) {
+            _state.value = ConnectionState.Connecting(host, port)
+            val buf = ByteArray(bufSize)
+            record.startRecording()
+            // No connection handshake on UDP; flip to Connected so UI reflects intent.
+            _state.value = ConnectionState.Connected(host, port, 0L, 0f)
+            var packetsSent = 0L
+            while (isActive) {
+                val n = record.read(buf, 0, buf.size)
+                if (n > 0) {
+                    val frame = pipeline.pushPcm(buf, n)
+                    if (frame != null) {
+                        sink.send(frame)
+                        packetsSent++
+                        val current = _state.value
+                        if (current is ConnectionState.Connected) {
+                            _state.value = current.copy(
+                                bytesSent = packetsSent * SpectrumUdpSink.FRAME_SIZE,
+                                rms = frame.level / 100f,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -171,6 +226,8 @@ class AudioCaptureService : LifecycleService() {
         audioRecord = null
         streamer?.close()
         streamer = null
+        spectrumSink?.close()
+        spectrumSink = null
         projection?.stop()
         projection = null
         if (_state.value !is ConnectionState.Failed) {
@@ -191,10 +248,21 @@ class AudioCaptureService : LifecycleService() {
     }
 
     private fun startInForeground() {
+        val launchIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val contentPi = PendingIntent.getActivity(
+            this,
+            0,
+            launchIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         val notif: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Snapcast Source")
+            .setContentTitle("SlowShell")
             .setContentText("Streaming system audio")
             .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentIntent(contentPi)
             .setOngoing(true)
             .build()
 
@@ -212,7 +280,7 @@ class AudioCaptureService : LifecycleService() {
     private fun createNotificationChannel() {
         val chan = NotificationChannel(
             CHANNEL_ID,
-            "Snapcast Source",
+            "SlowShell",
             NotificationManager.IMPORTANCE_LOW
         )
         getSystemService(NotificationManager::class.java).createNotificationChannel(chan)
@@ -222,7 +290,7 @@ class AudioCaptureService : LifecycleService() {
         private const val TAG = "AudioCaptureService"
         const val SAMPLE_RATE = 48000
         const val NOTIF_ID = 42
-        const val CHANNEL_ID = "snapcast_source"
+        const val CHANNEL_ID = "slowshell_app"
 
         // Service-singleton state flow so MainActivity can observe even after
         // process recreation. Service is the producer; nobody else writes here.

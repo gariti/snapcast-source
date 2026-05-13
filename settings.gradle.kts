@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SnapcastSource"
+rootProject.name = "SlowshellApp"
 include(":app")

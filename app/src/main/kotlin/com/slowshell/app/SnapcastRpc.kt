@@ -1,4 +1,4 @@
-package com.snapcastsource
+package com.slowshell.app
 
 import org.json.JSONObject
 import java.io.BufferedReader

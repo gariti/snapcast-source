@@ -1,4 +1,4 @@
-package com.snapcastsource
+package com.slowshell.app
 
 import android.Manifest
 import android.content.BroadcastReceiver
@@ -62,13 +62,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val PREFS_NAME = "snapcast_source_prefs"
+private const val PREFS_NAME = "slowshell_app_prefs"
 private const val KEY_SLOT = "slot_index"
 private const val KEY_HOST = "host"
 private const val KEY_PARTY_MODE = "party_mode"
 
 val SLOT_PORTS = listOf(4953, 4954, 4955, 4956)
-const val VIZ_PORT = 4900
+const val VIZ_PORT = 4900           // legacy TCP PCM viz path (snapcast-viz-tap)
+const val SPECTRUM_PORT = 4901      // Solo Listening UDP spectrum (phone-spectrum-tap)
 
 fun portToSlot(port: Int): Int? {
     val idx = SLOT_PORTS.indexOf(port)
@@ -79,6 +80,7 @@ class MainActivity : ComponentActivity() {
 
     private var pendingHost: String = ""
     private var pendingPort: Int = SLOT_PORTS[0]
+    private var pendingMode: String = "party"
 
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -90,6 +92,7 @@ class MainActivity : ComponentActivity() {
                 putExtra("data", data)
                 putExtra("host", pendingHost)
                 putExtra("port", pendingPort)
+                putExtra("mode", pendingMode)
             }
             startForegroundService(intent)
         }
@@ -135,9 +138,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startCapture(host: String, port: Int) {
+    private fun startCapture(host: String, port: Int, mode: String) {
         pendingHost = host
         pendingPort = port
+        pendingMode = mode
         val mpm = getSystemService(MediaProjectionManager::class.java)
         projectionLauncher.launch(mpm.createScreenCaptureIntent())
     }
@@ -155,7 +159,7 @@ fun SnapcastSourceScreen(
     onSlotChange: (Int) -> Unit,
     onHostChange: (String) -> Unit,
     onPartyModeChange: (Boolean) -> Unit,
-    onStart: (String, Int) -> Unit,
+    onStart: (String, Int, String) -> Unit,
     onStop: () -> Unit
 ) {
     var host by remember { mutableStateOf(initialHost) }
@@ -233,7 +237,7 @@ fun SnapcastSourceScreen(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "Snapcast Source",
+            text = "SlowShell",
             style = MaterialTheme.typography.headlineMedium
         )
 
@@ -249,26 +253,23 @@ fun SnapcastSourceScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("Party mode", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "broadcast to speakers",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
-            Switch(
-                checked = partyMode,
-                onCheckedChange = {
-                    partyMode = it
-                    onPartyModeChange(it)
-                },
-                enabled = editable
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+            Text("Mode", style = MaterialTheme.typography.labelMedium)
+            ModePicker(
+                partyMode = partyMode,
+                enabled = editable,
+                onSelect = { isParty ->
+                    partyMode = isParty
+                    onPartyModeChange(isParty)
+                }
+            )
+            Text(
+                if (partyMode)
+                    "Party — broadcast PCM to snapserver speakers"
+                else
+                    "Solo — on-device FFT, UDP spectrum to laptop visualizer",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
             )
         }
 
@@ -293,8 +294,9 @@ fun SnapcastSourceScreen(
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(
                 onClick = {
-                    val port = if (partyMode) SLOT_PORTS[slotIndex] else VIZ_PORT
-                    onStart(host, port)
+                    val port = if (partyMode) SLOT_PORTS[slotIndex] else SPECTRUM_PORT
+                    val mode = if (partyMode) "party" else "solo"
+                    onStart(host, port, mode)
                 },
                 enabled = !streaming
             ) { Text("Start") }
@@ -502,6 +504,35 @@ fun MediaVolumeSlider() {
 }
 
 @Composable
+fun ModePicker(
+    partyMode: Boolean,
+    enabled: Boolean,
+    onSelect: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        listOf("Party" to true, "Solo Listening" to false).forEach { (label, isParty) ->
+            val selected = partyMode == isParty
+            if (selected) {
+                Button(
+                    onClick = { onSelect(isParty) },
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f)
+                ) { Text(label) }
+            } else {
+                OutlinedButton(
+                    onClick = { onSelect(isParty) },
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f)
+                ) { Text(label) }
+            }
+        }
+    }
+}
+
+@Composable
 fun SlotPicker(
     selectedIndex: Int,
     enabled: Boolean,
@@ -595,7 +626,8 @@ fun StatusCard(state: ConnectionState) {
 }
 
 private fun targetLine(host: String, port: Int): String {
-    if (port == VIZ_PORT) return "→ $host:$port (Visualize)"
+    if (port == SPECTRUM_PORT) return "→ $host:$port (Solo / spectrum)"
+    if (port == VIZ_PORT) return "→ $host:$port (Visualize PCM)"
     val slot = portToSlot(port)
     return if (slot != null) "→ $host:$port (Slot $slot)" else "→ $host:$port"
 }

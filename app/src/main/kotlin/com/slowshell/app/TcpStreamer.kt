@@ -1,4 +1,4 @@
-package com.snapcastsource
+package com.slowshell.app
 
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
