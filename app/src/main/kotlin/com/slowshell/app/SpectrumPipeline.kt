@@ -111,10 +111,13 @@ class SpectrumPipeline(
                 count++
             }
             val avg = if (count > 0) sum / count else 0.0
-            // dB-ish mapping: -60dB → 0, 0dB → 100. Mags are already normalized by
-            // the /32768 done above plus the Hann window's effective gain (~0.5).
-            val db = 20.0 * log10(max(avg * 4.0, 1e-6))
-            val v = ((db + 60.0) * (100.0 / 60.0)).toInt().coerceIn(0, 100)
+            // Normalize raw FFT magnitudes back into ~[0, 1]: divide by fftSize/2
+            // (FFT's bin magnitude for a full-scale tone) and multiply by 2 to
+            // compensate for the Hann window's coherent gain of 0.5.
+            val normalized = avg * 4.0 / fftSize
+            // -90 dB → 0, 0 dB → 100. Quiet music sits ~30–50, loud peaks ~70–95.
+            val db = 20.0 * log10(max(normalized, 1e-9))
+            val v = ((db + 90.0) * (100.0 / 90.0)).toInt().coerceIn(0, 100)
             bandsOut[b] = v
             sumLevel += v
 
