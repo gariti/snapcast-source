@@ -132,6 +132,7 @@ class AudioCaptureService : LifecycleService() {
             val buf = ByteArray(bufSize)
             record.startRecording()
             tcp.connect()
+            var lastLoudMs = System.currentTimeMillis()
             while (isActive) {
                 val n = record.read(buf, 0, buf.size)
                 if (n > 0) {
@@ -139,6 +140,13 @@ class AudioCaptureService : LifecycleService() {
                     applyGain(buf, n, gain)
                     val rms = computeRms(buf, n)
                     tcp.write(buf, n, rms)
+                    if (rms > PARTY_SILENCE_RMS) {
+                        lastLoudMs = System.currentTimeMillis()
+                    } else if (System.currentTimeMillis() - lastLoudMs > IDLE_TIMEOUT_MS) {
+                        Log.i(TAG, "Auto-stopping party capture: silent for >${IDLE_TIMEOUT_MS / 60000} min")
+                        stopSelf()
+                        break
+                    }
                 }
             }
         }
@@ -161,6 +169,7 @@ class AudioCaptureService : LifecycleService() {
             // No connection handshake on UDP; flip to Connected so UI reflects intent.
             _state.value = ConnectionState.Connected(host, port, 0L, 0f)
             var packetsSent = 0L
+            var lastLoudMs = System.currentTimeMillis()
             while (isActive) {
                 val n = record.read(buf, 0, buf.size)
                 if (n > 0) {
@@ -174,6 +183,13 @@ class AudioCaptureService : LifecycleService() {
                                 bytesSent = packetsSent * SpectrumUdpSink.FRAME_SIZE,
                                 rms = frame.level / 100f,
                             )
+                        }
+                        if (frame.level > SOLO_SILENCE_LEVEL) {
+                            lastLoudMs = System.currentTimeMillis()
+                        } else if (System.currentTimeMillis() - lastLoudMs > IDLE_TIMEOUT_MS) {
+                            Log.i(TAG, "Auto-stopping solo capture: silent for >${IDLE_TIMEOUT_MS / 60000} min")
+                            stopSelf()
+                            break
                         }
                     }
                 }
@@ -291,6 +307,16 @@ class AudioCaptureService : LifecycleService() {
         const val SAMPLE_RATE = 48000
         const val NOTIF_ID = 42
         const val CHANNEL_ID = "slowshell_app"
+
+        // Auto-stop the capture after this much continuous silence so the
+        // laptop's SleepInhibitor can release (and the phone stops draining
+        // battery / network bandwidth on silent UDP frames).
+        private const val IDLE_TIMEOUT_MS = 5L * 60 * 1000  // 5 minutes
+        // SpectrumPipeline.Frame.level is 0..100 (mean of bands); even quiet
+        // music registers >1, true silence is 0.
+        private const val SOLO_SILENCE_LEVEL = 1
+        // computeRms returns a 0..1 float; silence is 0, line noise <0.001.
+        private const val PARTY_SILENCE_RMS = 0.005f
 
         // Service-singleton state flow so MainActivity can observe even after
         // process recreation. Service is the producer; nobody else writes here.
