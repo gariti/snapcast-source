@@ -71,7 +71,8 @@ class MediaSessionBeaconService : LifecycleService() {
         // Reverse command channel (desktop -> phone): bind once, run for the
         // service's lifetime. Independent of host config (we listen on all ifaces).
         if (commandJob?.isActive != true) {
-            val listener = CommandUdpListener(COMMAND_PORT).also { commandListener = it }
+            // Only the configured desktop host may send us control commands.
+            val listener = CommandUdpListener(COMMAND_PORT, host).also { commandListener = it }
             commandJob = lifecycleScope.launch(Dispatchers.IO) { listener.listen() }
         }
 
