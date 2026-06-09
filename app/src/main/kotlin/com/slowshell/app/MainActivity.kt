@@ -9,6 +9,7 @@ import android.media.AudioManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -114,6 +115,12 @@ class MainActivity : ComponentActivity() {
         val initialHost = prefs.getString(KEY_HOST, "192.168.0.163") ?: "192.168.0.163"
         val initialPartyMode = prefs.getBoolean(KEY_PARTY_MODE, false)
 
+        // Persist the default host on first launch so MediaSessionBeaconService
+        // (which reads prefs directly, not the in-memory UI state) can find it.
+        if (!prefs.contains(KEY_HOST)) {
+            prefs.edit().putString(KEY_HOST, initialHost).apply()
+        }
+
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -135,6 +142,19 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Auto-start the cast-detection beacon whenever host is set AND
+        // Notification Access is granted. Stays running until the user revokes
+        // either condition; safe to call repeatedly (startForegroundService is
+        // idempotent on the same component).
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val host = prefs.getString(KEY_HOST, "") ?: ""
+        if (host.isNotBlank() && MediaSessionListener.isAccessGranted(this)) {
+            MediaSessionBeaconService.start(this)
         }
     }
 
@@ -309,6 +329,8 @@ fun SnapcastSourceScreen(
 
         StatusCard(state)
 
+        CastDetectionCard(hostBlank = host.isBlank())
+
         ClientsCard(
             status = snapStatus,
             error = snapError,
@@ -317,6 +339,101 @@ fun SnapcastSourceScreen(
             onSetStream = ::setClientStream,
             onToggleMute = ::toggleClientMute
         )
+    }
+}
+
+@Composable
+fun CastDetectionCard(hostBlank: Boolean) {
+    val context = LocalContext.current
+    val listenerState by MediaSessionListener.state.collectAsState()
+    val beaconState by MediaSessionBeaconService.serviceState.collectAsState()
+
+    // Recompute "access granted" on every recomposition so returning from
+    // Settings reflects the new state without an extra observer.
+    var accessGranted by remember { mutableStateOf(MediaSessionListener.isAccessGranted(context)) }
+    LaunchedEffect(Unit) { accessGranted = MediaSessionListener.isAccessGranted(context) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("Cast detection", style = MaterialTheme.typography.titleMedium)
+
+        if (!accessGranted) {
+            Text(
+                "Notification Access needed to detect music playing through cast targets " +
+                    "(KEF, Chromecast, AirPlay). Without it, the visualizer can't tell " +
+                    "you're playing music when audio bypasses the phone.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Button(
+                onClick = {
+                    val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                        // Some OEMs honor this extra to scroll to the app's row.
+                        putExtra(
+                            ":settings:fragment_args_key",
+                            "com.slowshell.app/com.slowshell.app.MediaSessionListener"
+                        )
+                    }
+                    context.startActivity(intent)
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Open Notification Access settings") }
+        } else if (hostBlank) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF888888))
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Access granted — set host above to start beacon")
+            }
+        } else {
+            val running = beaconState is MediaSessionBeaconService.ServiceState.Running
+            val dotColor = when {
+                running && listenerState.isPlaying -> Color(0xFF4CAF50)  // green
+                running -> Color(0xFF1976D2)                              // blue (running, idle)
+                else -> Color(0xFF888888)                                 // gray
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(dotColor)
+                )
+                Spacer(Modifier.width(8.dp))
+                val label = when {
+                    running && listenerState.isPlaying -> "Playing — ${listenerState.sessionCount} session(s)"
+                    running -> "Listening — ${listenerState.sessionCount} session(s), none playing"
+                    else -> "Beacon not running"
+                }
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+            }
+            val running2 = beaconState
+            if (running2 is MediaSessionBeaconService.ServiceState.Running) {
+                Text(
+                    "→ ${running2.host}:${running2.port}  · packets: ${running2.packetsSent}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            if (!listenerState.listenerConnected) {
+                Text(
+                    "Listener disconnected — try toggling Notification Access off and on.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
     }
 }
 
