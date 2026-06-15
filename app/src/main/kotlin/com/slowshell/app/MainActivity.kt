@@ -67,6 +67,7 @@ private const val PREFS_NAME = "slowshell_app_prefs"
 private const val KEY_SLOT = "slot_index"
 private const val KEY_HOST = "host"
 private const val KEY_PARTY_MODE = "party_mode"
+private const val KEY_PSK = PairingCrypto.PREFS_KEY_PSK
 
 val SLOT_PORTS = listOf(4953, 4954, 4955, 4956)
 const val VIZ_PORT = 4900           // legacy TCP PCM viz path (snapcast-viz-tap)
@@ -114,6 +115,7 @@ class MainActivity : ComponentActivity() {
         val initialSlotIdx = prefs.getInt(KEY_SLOT, 0).coerceIn(0, SLOT_PORTS.size - 1)
         val initialHost = prefs.getString(KEY_HOST, "192.168.0.163") ?: "192.168.0.163"
         val initialPartyMode = prefs.getBoolean(KEY_PARTY_MODE, false)
+        val initialPsk = prefs.getString(KEY_PSK, "") ?: ""
 
         // Persist the default host on first launch so MediaSessionBeaconService
         // (which reads prefs directly, not the in-memory UI state) can find it.
@@ -128,11 +130,17 @@ class MainActivity : ComponentActivity() {
                         initialHost = initialHost,
                         initialSlotIndex = initialSlotIdx,
                         initialPartyMode = initialPartyMode,
+                        initialPsk = initialPsk,
                         onSlotChange = { idx ->
                             prefs.edit().putInt(KEY_SLOT, idx).apply()
                         },
                         onHostChange = { host ->
                             prefs.edit().putString(KEY_HOST, host).apply()
+                        },
+                        onPskChange = { psk ->
+                            // Store the canonical (normalized) code so the HMAC
+                            // key matches the desktop byte-for-byte.
+                            prefs.edit().putString(KEY_PSK, PairingCrypto.normalize(psk)).apply()
                         },
                         onPartyModeChange = { enabled ->
                             prefs.edit().putBoolean(KEY_PARTY_MODE, enabled).apply()
@@ -176,8 +184,10 @@ fun SnapcastSourceScreen(
     initialHost: String,
     initialSlotIndex: Int,
     initialPartyMode: Boolean,
+    initialPsk: String,
     onSlotChange: (Int) -> Unit,
     onHostChange: (String) -> Unit,
+    onPskChange: (String) -> Unit,
     onPartyModeChange: (Boolean) -> Unit,
     onStart: (String, Int, String) -> Unit,
     onStop: () -> Unit
@@ -185,6 +195,7 @@ fun SnapcastSourceScreen(
     var host by remember { mutableStateOf(initialHost) }
     var slotIndex by remember { mutableIntStateOf(initialSlotIndex) }
     var partyMode by remember { mutableStateOf(initialPartyMode) }
+    var psk by remember { mutableStateOf(initialPsk) }
 
     val state by AudioCaptureService.state.collectAsState()
     val streaming = state !is ConnectionState.Idle && state !is ConnectionState.Failed
@@ -273,6 +284,19 @@ fun SnapcastSourceScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
+        DiscoveryCard(
+            psk = psk,
+            enabled = editable,
+            onPskChange = {
+                psk = it
+                onPskChange(it)
+            },
+            onHostResolved = { resolvedIp ->
+                host = resolvedIp
+                onHostChange(resolvedIp)
+            },
+        )
+
         Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
             Text("Mode", style = MaterialTheme.typography.labelMedium)
             ModePicker(
@@ -339,6 +363,91 @@ fun SnapcastSourceScreen(
             onSetStream = ::setClientStream,
             onToggleMute = ::toggleClientMute
         )
+    }
+}
+
+@Composable
+fun DiscoveryCard(
+    psk: String,
+    enabled: Boolean,
+    onPskChange: (String) -> Unit,
+    onHostResolved: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var status by remember { mutableStateOf<String?>(null) }
+    var searching by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("Auto-discover desktop", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Pair once: run `slowshell-pairing-code` on the desktop, enter the code " +
+                "below, then tap Find. The phone verifies the desktop holds the same " +
+                "code (challenge-response) before trusting it — no IP typing, and a " +
+                "spoofed host on the LAN can't pass.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        OutlinedTextField(
+            value = psk,
+            onValueChange = onPskChange,
+            label = { Text("Pairing code") },
+            singleLine = true,
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(
+            onClick = {
+                searching = true
+                status = "Searching…"
+                scope.launch {
+                    val normalized = PairingCrypto.normalize(psk)
+                    if (normalized.isEmpty()) {
+                        status = "Enter the pairing code first."
+                        searching = false
+                        return@launch
+                    }
+                    val candidates = DesktopDiscovery(context).discover()
+                    if (candidates.isEmpty()) {
+                        status = "No SlowShell desktop found on this network."
+                        searching = false
+                        return@launch
+                    }
+                    var paired: String? = null
+                    for (c in candidates) {
+                        if (PairingVerifier.verify(c.host, c.vrfyPort, normalized)) {
+                            paired = c.host
+                            break
+                        }
+                    }
+                    status = if (paired != null) {
+                        onHostResolved(paired)
+                        "Paired ✓ — desktop at $paired"
+                    } else {
+                        "Found a desktop but the pairing code didn't match. " +
+                            "Re-check the code on the desktop (slowshell-pairing-code)."
+                    }
+                    searching = false
+                }
+            },
+            enabled = enabled && !searching,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(if (searching) "Searching…" else "Find desktop") }
+
+        status?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
     }
 }
 
