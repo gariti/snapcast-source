@@ -147,6 +147,15 @@ class AudioCaptureService : LifecycleService() {
                         stopSelf()
                         break
                     }
+                } else if (n < 0) {
+                    // Negative = AudioRecord error (dead object / invalid op / stale
+                    // projection). read() returns these IMMEDIATELY, so without a
+                    // bail-out this loop busy-spins a core at 100% forever and the
+                    // foreground service keeps it alive. Stop instead of spinning.
+                    Log.e(TAG, "AudioRecord.read error $n; stopping party capture")
+                    publishState(ConnectionState.Failed("Audio capture error ($n)"))
+                    stopSelf()
+                    break
                 }
             }
         }
@@ -192,6 +201,13 @@ class AudioCaptureService : LifecycleService() {
                             break
                         }
                     }
+                } else if (n < 0) {
+                    // Negative = AudioRecord error; read() returns immediately, so
+                    // bail out instead of busy-spinning a core (see party loop).
+                    Log.e(TAG, "AudioRecord.read error $n; stopping solo capture")
+                    publishState(ConnectionState.Failed("Audio capture error ($n)"))
+                    stopSelf()
+                    break
                 }
             }
         }
