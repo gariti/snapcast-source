@@ -14,6 +14,7 @@ import java.net.DatagramSocket
  *   0    2     magic = bytes 'S','C'
  *   2    1     version = 1
  *   3    1     cmd   1=SetVolume 2=Play 3=Pause 4=PlayPause 5=Next 6=Prev
+ *                     7=PauseCapture 8=ResumeCapture (consumer-gated streaming)
  *   4    1     arg   volume 0..100 (SetVolume), else 0
  *   5    3     reserved
  *   8    4     seq u32
@@ -85,7 +86,11 @@ class CommandUdpListener(
             val cmd = buf[3].toInt() and 0xFF
             val arg = buf[4].toInt() and 0xFF
             Log.d(TAG, "cmd=$cmd arg=$arg from $src")
-            MediaSessionListener.applyCommand(cmd, arg)
+            when (cmd) {
+                CMD_PAUSE_CAPTURE -> AudioCaptureService.setPaused(true)
+                CMD_RESUME_CAPTURE -> AudioCaptureService.setPaused(false)
+                else -> MediaSessionListener.applyCommand(cmd, arg)
+            }
         }
         Log.i(TAG, "command listener stopped")
     }
@@ -97,5 +102,7 @@ class CommandUdpListener(
     companion object {
         private const val TAG = "CommandUdpListener"
         const val FRAME_SIZE = 16
+        private const val CMD_PAUSE_CAPTURE = 7
+        private const val CMD_RESUME_CAPTURE = 8
     }
 }

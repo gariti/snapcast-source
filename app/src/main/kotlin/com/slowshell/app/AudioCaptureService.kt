@@ -24,6 +24,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
@@ -74,6 +75,7 @@ class AudioCaptureService : LifecycleService() {
     }
 
     private fun startCapture(projection: MediaProjection, mode: Mode, host: String, port: Int) {
+        _paused.value = false  // clear any stale pause from a previous session
         val config = AudioPlaybackCaptureConfiguration.Builder(projection)
             .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
             .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -134,6 +136,16 @@ class AudioCaptureService : LifecycleService() {
             tcp.connect()
             var lastLoudMs = System.currentTimeMillis()
             while (isActive) {
+                if (paused.value) {
+                    // Desktop has no consumer — stop capturing until it resumes.
+                    runCatching { record.stop() }
+                    Log.i(TAG, "Party capture paused by desktop")
+                    paused.first { !it }  // suspends; coroutine cancellation breaks out
+                    runCatching { record.startRecording() }
+                    lastLoudMs = System.currentTimeMillis()  // don't trip silence-stop on resume
+                    Log.i(TAG, "Party capture resumed")
+                    continue
+                }
                 val n = record.read(buf, 0, buf.size)
                 if (n > 0) {
                     val gain = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maxVol
@@ -181,6 +193,16 @@ class AudioCaptureService : LifecycleService() {
             var lastLoudMs = System.currentTimeMillis()
             var lastUiMs = 0L
             while (isActive) {
+                if (paused.value) {
+                    // Desktop has no consumer — stop capturing until it resumes.
+                    runCatching { record.stop() }
+                    Log.i(TAG, "Solo capture paused by desktop")
+                    paused.first { !it }  // suspends; coroutine cancellation breaks out
+                    runCatching { record.startRecording() }
+                    lastLoudMs = System.currentTimeMillis()
+                    Log.i(TAG, "Solo capture resumed")
+                    continue
+                }
                 val n = record.read(buf, 0, buf.size)
                 if (n > 0) {
                     val frame = pipeline.pushPcm(buf, n)
@@ -345,5 +367,15 @@ class AudioCaptureService : LifecycleService() {
         // process recreation. Service is the producer; nobody else writes here.
         private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
         val state: StateFlow<ConnectionState> = _state.asStateFlow()
+
+        // Consumer-gated streaming: the desktop sends a pause/resume capture
+        // command (CommandUdpListener cmd 7/8) when its visualizer is/ isn't
+        // on-screen. While paused, the capture loop stops AudioRecord — no
+        // MediaProjection read, no FFT, no transmit — but keeps the service and
+        // socket alive so resume is instant. Saves phone battery when nothing
+        // on the desktop is actually displaying the stream.
+        private val _paused = MutableStateFlow(false)
+        val paused: StateFlow<Boolean> = _paused.asStateFlow()
+        fun setPaused(p: Boolean) { _paused.value = p }
     }
 }
