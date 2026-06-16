@@ -1,16 +1,31 @@
 package com.slowshell.app
 
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.IOException
 import java.io.OutputStream
 import java.net.Socket
 
+/**
+ * Streams PCM to the desktop over TCP. [write] is called from the audio capture
+ * thread on every buffer, so it MUST NOT block: a failed/absent connection
+ * schedules an asynchronous reconnect on [scope] (with exponential backoff) and
+ * the audio thread simply drops frames until the link is back. UI state copies
+ * (bytesSent/rms) are throttled to ~1 Hz so the high-frequency stream doesn't
+ * trigger a Compose recomposition on every audio buffer.
+ */
 class TcpStreamer(
     private val host: String,
-    private val port: Int
+    private val port: Int,
+    private val scope: CoroutineScope,
 ) {
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val state: StateFlow<ConnectionState> = _state.asStateFlow()
@@ -21,7 +36,10 @@ class TcpStreamer(
     @Volatile private var lastRms: Float = 0f
     private var attempt = 0
     private var backoffMs = INITIAL_BACKOFF_MS
+    @Volatile private var reconnectJob: Job? = null
+    private var lastUiUpdateMs = 0L
 
+    /** Blocking single connection attempt (used once at startup). Never sleeps. */
     fun connect() {
         attempt++
         _state.value = if (attempt == 1) {
@@ -47,7 +65,6 @@ class TcpStreamer(
             val reason = categorizeIoError(e.message)
             Log.w(TAG, "Connect failed: $reason")
             _state.value = ConnectionState.Reconnecting(host, port, attempt, reason)
-            sleepBackoff()
         }
     }
 
@@ -55,37 +72,43 @@ class TcpStreamer(
         lastRms = rms
         val stream = out
         if (stream == null) {
-            reconnect("Not connected")
+            scheduleReconnect("Not connected")
             return
         }
         try {
             stream.write(buf, 0, len)
             totalBytesSent += len
-            val current = _state.value
-            if (current is ConnectionState.Connected) {
-                _state.value = current.copy(bytesSent = totalBytesSent, rms = rms)
+            val now = System.currentTimeMillis()
+            if (now - lastUiUpdateMs >= UI_UPDATE_MS) {
+                lastUiUpdateMs = now
+                val current = _state.value
+                if (current is ConnectionState.Connected) {
+                    _state.value = current.copy(bytesSent = totalBytesSent, rms = rms)
+                }
             }
         } catch (e: IOException) {
             val reason = categorizeIoError(e.message)
             Log.w(TAG, "Write failed: $reason")
-            reconnect(reason)
+            scheduleReconnect(reason)
         }
     }
 
-    private fun reconnect(reason: String) {
+    /**
+     * Tear down the dead socket and kick off a background reconnect loop. Returns
+     * immediately — NEVER blocks the audio thread. At most one retry loop runs.
+     */
+    @Synchronized
+    private fun scheduleReconnect(reason: String) {
+        if (reconnectJob?.isActive == true) return
         close()
         _state.value = ConnectionState.Reconnecting(host, port, attempt, reason)
-        sleepBackoff()
-        connect()
-    }
-
-    private fun sleepBackoff() {
-        try {
-            Thread.sleep(backoffMs)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
+        reconnectJob = scope.launch(Dispatchers.IO) {
+            while (isActive && out == null) {
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
+                connect()
+            }
         }
-        backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
     }
 
     fun close() {
@@ -98,9 +121,16 @@ class TcpStreamer(
         }
     }
 
+    fun stop() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+        close()
+    }
+
     companion object {
         private const val TAG = "TcpStreamer"
         private const val INITIAL_BACKOFF_MS = 250L
         private const val MAX_BACKOFF_MS = 5_000L
+        private const val UI_UPDATE_MS = 1_000L
     }
 }

@@ -37,6 +37,7 @@ class SpectrumPipeline(
     }
     private val mono = DoubleArray(fftSize)
     private val fftBuf = DoubleArray(fftSize)
+    private val mags = DoubleArray(fftSize / 2)  // reused per frame — no per-emit alloc
     private var monoFill = 0
 
     private val bandLow: IntArray
@@ -91,7 +92,6 @@ class SpectrumPipeline(
 
         fft.realForward(fftBuf)
 
-        val mags = DoubleArray(fftSize / 2)
         mags[0] = Math.abs(fftBuf[0])
         for (k in 1 until fftSize / 2) {
             val re = fftBuf[2 * k]

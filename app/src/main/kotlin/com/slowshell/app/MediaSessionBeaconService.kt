@@ -16,9 +16,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Foreground service that sends a small UDP beacon ("media session is playing")
@@ -28,7 +29,8 @@ import kotlinx.coroutines.delay
  *
  * Cadence:
  *   - 500 ms while at least one session is playing
- *   - 2000 ms keepalive otherwise (also fires when listener disconnects)
+ *   - 10 s idle heartbeat otherwise, but fires IMMEDIATELY on any media-state
+ *     change (play/pause/session/listener) so the desktop never lags a change
  *
  * Reads host from MainActivity's SharedPreferences. Beacon port is fixed at 4902.
  */
@@ -80,22 +82,39 @@ class MediaSessionBeaconService : LifecycleService() {
             beaconJob = lifecycleScope.launch(Dispatchers.IO) {
                 _serviceState.value = ServiceState.Running(host, BEACON_PORT)
                 var packetsSent = 0L
+                var lastUiMs = 0L
                 while (isActive) {
                     val s = MediaSessionListener.state.value
                     sink?.send(s.isPlaying, s.sessionCount)
                     nowPlayingSink?.send(s)
                     packetsSent++
+                    // Only repaint the UI when something user-visible changed, or
+                    // at most every ~3 s to refresh the packet counter — avoids a
+                    // recomposition on every idle keepalive.
                     val current = _serviceState.value
+                    val now = System.currentTimeMillis()
                     if (current is ServiceState.Running) {
-                        _serviceState.value = current.copy(
-                            packetsSent = packetsSent,
-                            lastIsPlaying = s.isPlaying,
-                            lastSessionCount = s.sessionCount,
-                            listenerConnected = s.listenerConnected,
-                        )
+                        val changed = current.lastIsPlaying != s.isPlaying ||
+                            current.lastSessionCount != s.sessionCount ||
+                            current.listenerConnected != s.listenerConnected
+                        if (changed || now - lastUiMs >= UI_REFRESH_MS) {
+                            lastUiMs = now
+                            _serviceState.value = current.copy(
+                                packetsSent = packetsSent,
+                                lastIsPlaying = s.isPlaying,
+                                lastSessionCount = s.sessionCount,
+                                listenerConnected = s.listenerConnected,
+                            )
+                        }
                     }
+                    // Playing: tight cadence for now-playing freshness. Idle: long
+                    // heartbeat to let the radio sleep, BUT wake instantly on any
+                    // media-state change so the desktop reacts the moment you hit
+                    // play (no multi-second lag from a long idle sleep).
                     val interval = if (s.isPlaying) PLAYING_INTERVAL_MS else IDLE_INTERVAL_MS
-                    delay(interval)
+                    withTimeoutOrNull(interval) {
+                        MediaSessionListener.state.first { it != s }
+                    }
                 }
             }
         }
@@ -179,7 +198,11 @@ class MediaSessionBeaconService : LifecycleService() {
         const val NOTIF_ID = 43
 
         private const val PLAYING_INTERVAL_MS = 500L
-        private const val IDLE_INTERVAL_MS = 2000L
+        // Idle heartbeat — long, since any real state change wakes the loop
+        // immediately via the state-flow await. Keeps the radio asleep longer.
+        private const val IDLE_INTERVAL_MS = 10_000L
+        // Cap on how often an unchanged idle beacon repaints the packet counter.
+        private const val UI_REFRESH_MS = 3_000L
 
         private val _serviceState = MutableStateFlow<ServiceState>(ServiceState.Idle("Not started"))
         val serviceState: StateFlow<ServiceState> = _serviceState.asStateFlow()

@@ -123,7 +123,7 @@ class AudioCaptureService : LifecycleService() {
         port: Int,
         bufSize: Int,
     ) {
-        val tcp = TcpStreamer(host, port)
+        val tcp = TcpStreamer(host, port, lifecycleScope)
         streamer = tcp
 
         captureJob = lifecycleScope.launch(Dispatchers.IO) {
@@ -179,6 +179,7 @@ class AudioCaptureService : LifecycleService() {
             _state.value = ConnectionState.Connected(host, port, 0L, 0f)
             var packetsSent = 0L
             var lastLoudMs = System.currentTimeMillis()
+            var lastUiMs = 0L
             while (isActive) {
                 val n = record.read(buf, 0, buf.size)
                 if (n > 0) {
@@ -186,8 +187,12 @@ class AudioCaptureService : LifecycleService() {
                     if (frame != null) {
                         sink.send(frame)
                         packetsSent++
+                        // Throttle UI state to ~1 Hz — frames arrive ~30 Hz and
+                        // each copy would otherwise recompose the status screen.
+                        val now = System.currentTimeMillis()
                         val current = _state.value
-                        if (current is ConnectionState.Connected) {
+                        if (current is ConnectionState.Connected && now - lastUiMs >= UI_UPDATE_MS) {
+                            lastUiMs = now
                             _state.value = current.copy(
                                 bytesSent = packetsSent * SpectrumUdpSink.FRAME_SIZE,
                                 rms = frame.level / 100f,
@@ -256,7 +261,7 @@ class AudioCaptureService : LifecycleService() {
         runCatching { audioRecord?.stop() }
         audioRecord?.release()
         audioRecord = null
-        streamer?.close()
+        streamer?.stop()
         streamer = null
         spectrumSink?.close()
         spectrumSink = null
@@ -321,6 +326,8 @@ class AudioCaptureService : LifecycleService() {
     companion object {
         private const val TAG = "AudioCaptureService"
         const val SAMPLE_RATE = 48000
+        // Throttle interval for high-frequency UI telemetry (bytesSent/rms).
+        private const val UI_UPDATE_MS = 1_000L
         const val NOTIF_ID = 42
         const val CHANNEL_ID = "slowshell_app"
 
