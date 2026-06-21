@@ -37,6 +37,7 @@ class TcpStreamer(
     private var attempt = 0
     private var backoffMs = INITIAL_BACKOFF_MS
     @Volatile private var reconnectJob: Job? = null
+    @Volatile private var stopped = false
     private var lastUiUpdateMs = 0L
 
     /** Blocking single connection attempt (used once at startup). Never sleeps. */
@@ -69,6 +70,7 @@ class TcpStreamer(
     }
 
     fun write(buf: ByteArray, len: Int, rms: Float) {
+        if (stopped) return
         lastRms = rms
         val stream = out
         if (stream == null) {
@@ -99,6 +101,7 @@ class TcpStreamer(
      */
     @Synchronized
     private fun scheduleReconnect(reason: String) {
+        if (stopped) return
         if (reconnectJob?.isActive == true) return
         close()
         _state.value = ConnectionState.Reconnecting(host, port, attempt, reason)
@@ -122,6 +125,11 @@ class TcpStreamer(
     }
 
     fun stop() {
+        // Terminal: a stopped streamer must never write or re-arm a reconnect,
+        // even if the audio thread fires one last write() after cancellation.
+        // Without this a torn-down session can resurrect its socket and fight
+        // the new session for the mixer slot.
+        stopped = true
         reconnectJob?.cancel()
         reconnectJob = null
         close()

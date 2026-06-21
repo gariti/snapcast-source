@@ -60,6 +60,14 @@ class AudioCaptureService : LifecycleService() {
             return stopAndReturn("Missing projection data or host")
         }
 
+        // A second start (tapping Start again, or switching slot/mode without
+        // stopping first) must NOT leave the previous capture loop and its TCP
+        // socket alive. Two sockets on one mixer slot make the desktop
+        // abort-and-replace them in a loop, which the phone sees as endless
+        // connect/disconnect — and burns double the CPU/radio. Tear the prior
+        // session fully down before building the new one.
+        teardownCapture()
+
         val mpm = getSystemService(MediaProjectionManager::class.java)
         projection = mpm.getMediaProjection(resultCode, data).also {
             it.registerCallback(object : MediaProjection.Callback() {
@@ -279,7 +287,23 @@ class AudioCaptureService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        teardownCapture()
+        if (_state.value !is ConnectionState.Failed) {
+            _state.value = ConnectionState.Idle
+        }
+        super.onDestroy()
+    }
+
+    /**
+     * Fully stop the current capture session: cancel the capture loop, close the
+     * TCP/UDP sink, release the AudioRecord, and stop the MediaProjection. Safe
+     * to call when nothing is running (all fields already null). Leaves [_state]
+     * untouched so the caller decides the resulting state (Idle on destroy, or
+     * the new Connecting state when restarting).
+     */
+    private fun teardownCapture() {
         captureJob?.cancel()
+        captureJob = null
         runCatching { audioRecord?.stop() }
         audioRecord?.release()
         audioRecord = null
@@ -289,10 +313,6 @@ class AudioCaptureService : LifecycleService() {
         spectrumSink = null
         projection?.stop()
         projection = null
-        if (_state.value !is ConnectionState.Failed) {
-            _state.value = ConnectionState.Idle
-        }
-        super.onDestroy()
     }
 
     override fun onBind(intent: Intent): IBinder? {
