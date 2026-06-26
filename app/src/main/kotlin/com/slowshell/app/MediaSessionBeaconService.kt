@@ -1,6 +1,8 @@
 package com.slowshell.app
 
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -46,6 +48,23 @@ class MediaSessionBeaconService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         host = readHostPref()
+        // Ensure the notification channel exists. AudioCaptureService normally
+        // creates it, but on the boot-start path (BootReceiver) that service has
+        // never run, and startForeground() on a missing channel fails.
+        ensureNotificationChannel()
+    }
+
+    private fun ensureNotificationChannel() {
+        val mgr = getSystemService(NotificationManager::class.java)
+        if (mgr.getNotificationChannel(AudioCaptureService.CHANNEL_ID) == null) {
+            mgr.createNotificationChannel(
+                NotificationChannel(
+                    AudioCaptureService.CHANNEL_ID,
+                    "SlowShell",
+                    NotificationManager.IMPORTANCE_LOW,
+                )
+            )
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -170,7 +189,7 @@ class MediaSessionBeaconService : LifecycleService() {
             startForeground(
                 NOTIF_ID,
                 notif,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             )
         } else {
             startForeground(NOTIF_ID, notif)
