@@ -35,6 +35,18 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- QR device flow: `slowshell-pairing-code` on the desktop renders
+                 slowshell://pair?v=1&code=…&host=<magicdns>&lan=<ip> as a QR.
+                 The stock camera app scans it and fires this VIEW intent — no
+                 in-app scanner, no camera permission. MainActivity stores the
+                 code, then verifies host candidates via the 4905 HMAC
+                 challenge-response and keeps whichever really answers. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="slowshell" android:host="pair" />
+            </intent-filter>
         </activity>
 
         <service

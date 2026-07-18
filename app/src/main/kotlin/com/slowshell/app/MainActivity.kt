@@ -59,7 +59,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -116,6 +121,11 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        // QR device flow: a slowshell://pair deep link (scanned with the stock
+        // camera) lands here on cold start. Must run BEFORE the prefs reads
+        // below so the freshly stored code/host seed the UI's initial values.
+        handlePairIntent(intent)
+
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val initialSlotIdx = prefs.getInt(KEY_SLOT, 0).coerceIn(0, SLOT_PORTS.size - 1)
         val initialHost = prefs.getString(KEY_HOST, DEFAULT_HOST) ?: DEFAULT_HOST
@@ -171,6 +181,76 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // Warm path: app already open when the QR was scanned. Store + verify,
+        // then recreate so the Compose fields re-seed from the new prefs.
+        if (handlePairIntent(intent)) recreate()
+    }
+
+    /**
+     * QR device flow: parse slowshell://pair?v=1&code=…&host=<magicdns>&lan=<ip>
+     * (rendered by the desktop's `slowshell-pairing-code`). Synchronously
+     * stores the pairing code + a provisional host, then asynchronously proves
+     * each candidate host via the 4905 HMAC challenge-response and keeps the
+     * first that answers — tailnet name preferred, LAN fallback. Returns true
+     * if the intent was a pair link.
+     */
+    private fun handlePairIntent(intent: Intent?): Boolean {
+        val uri = intent?.data ?: return false
+        if (uri.scheme != "slowshell" || uri.host != "pair") return false
+
+        val code = PairingCrypto.normalize(uri.getQueryParameter("code") ?: "")
+        if (code.isEmpty()) {
+            _pairStatus.value = "QR is missing the pairing code — regenerate it on the desktop."
+            return true
+        }
+        val tsHost = uri.getQueryParameter("host")?.trim() ?: ""
+        // `lan` may be a comma-separated list (multi-homed desktop, e.g.
+        // wired + wifi) — try each in order.
+        val lanHosts = (uri.getQueryParameter("lan") ?: "")
+            .split(',').map { it.trim() }.filter { it.isNotBlank() }
+        val vrfyPort = uri.getQueryParameter("vrfy")?.toIntOrNull() ?: DEFAULT_VRFY_PORT
+
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val provisional = tsHost.ifBlank { lanHosts.firstOrNull() ?: "" }
+        prefs.edit().apply {
+            putString(KEY_PSK, code)
+            if (provisional.isNotBlank()) putString(KEY_HOST, provisional)
+            apply()
+        }
+        _pairStatus.value = "QR scanned — verifying desktop…"
+
+        val appCtx = applicationContext
+        val candidates = (listOf(tsHost) + lanHosts).filter { it.isNotBlank() }.distinct()
+        // Process-level scope: survives the recreate() on the warm path.
+        pairScope.launch {
+            var chosen: String? = null
+            for (c in candidates) {
+                if (PairingVerifier.verify(c, vrfyPort, code)) {
+                    chosen = c
+                    break
+                }
+            }
+            if (chosen != null) {
+                prefs.edit().putString(KEY_HOST, chosen).apply()
+                val via = if (chosen == tsHost) "Tailscale" else "LAN"
+                _pairStatus.value = "Paired ✓ — desktop at $chosen ($via)"
+                // Bounce the beacon so it picks up the new host + code now.
+                if (MediaSessionListener.isAccessGranted(appCtx)) {
+                    MediaSessionBeaconService.stop(appCtx)
+                    MediaSessionBeaconService.start(appCtx)
+                }
+            } else if (provisional.isNotBlank()) {
+                _pairStatus.value = "Code + host saved ($provisional), but the desktop " +
+                    "didn't answer verification — is it on and on the same network/tailnet?"
+            } else {
+                _pairStatus.value = "Code saved. QR had no host — set the host field manually."
+            }
+        }
+        return true
+    }
+
     private fun startCapture(host: String, port: Int, mode: String) {
         pendingHost = host
         pendingPort = port
@@ -181,6 +261,16 @@ class MainActivity : ComponentActivity() {
 
     private fun stopCapture() {
         stopService(Intent(this, AudioCaptureService::class.java))
+    }
+
+    companion object {
+        const val DEFAULT_VRFY_PORT = 4905
+
+        private val pairScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        // Latest QR-pairing outcome, shown by DiscoveryCard.
+        private val _pairStatus = MutableStateFlow<String?>(null)
+        val pairStatus: StateFlow<String?> = _pairStatus.asStateFlow()
     }
 }
 
@@ -382,6 +472,7 @@ fun DiscoveryCard(
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf<String?>(null) }
     var searching by remember { mutableStateOf(false) }
+    val qrPairStatus by MainActivity.pairStatus.collectAsState()
 
     Column(
         modifier = Modifier
@@ -391,15 +482,25 @@ fun DiscoveryCard(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text("Auto-discover desktop", style = MaterialTheme.typography.titleMedium)
+        Text("Pair with desktop", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Pair once: run `slowshell-pairing-code` on the desktop, enter the code " +
-                "below, then tap Find. The phone verifies the desktop holds the same " +
-                "code (challenge-response) before trusting it — no IP typing, and a " +
-                "spoofed host on the LAN can't pass.",
+            "Easiest: run `slowshell-pairing-code` on the desktop and point this " +
+                "phone's CAMERA app at the QR — it fills everything in and verifies " +
+                "the desktop cryptographically. Manual fallback: type the code below " +
+                "and tap Find (mDNS + the same challenge-response).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.outline,
         )
+        qrPairStatus?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (it.startsWith("Paired"))
+                    Color(0xFF4CAF50)
+                else
+                    MaterialTheme.colorScheme.outline,
+            )
+        }
         OutlinedTextField(
             value = psk,
             onValueChange = onPskChange,
