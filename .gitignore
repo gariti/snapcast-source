@@ -12,3 +12,4 @@ app/release/
 *.apk
 *.aab
 *.keystore
+.kotlin/

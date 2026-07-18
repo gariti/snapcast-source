@@ -12,8 +12,26 @@ android {
         applicationId = "com.slowshell.app"
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
+    }
+
+    // Two distribution flavors, IDENTICAL for the custom link (control channel
+    // + spectrum + party PCM). They exist for the deferred messaging layer,
+    // whose push transport and restricted-permission strategy must diverge:
+    //   foss -> UnifiedPush, may request telephony/all-files perms later
+    //   play -> FCM, Play-policy-safe permission set only
+    // Per-flavor behavior goes through com.slowshell.app.features.FlavorFeatures
+    // (one impl per flavor source set) — never `if (BuildConfig.FLAVOR == ...)`.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("foss") {
+            dimension = "distribution"
+            isDefault = true
+        }
+        create("play") {
+            dimension = "distribution"
+        }
     }
 
     buildTypes {
@@ -37,9 +55,12 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true   // ControlChannelClient reports VERSION_NAME in its hello
     }
 
     sourceSets["main"].java.srcDirs("src/main/kotlin")
+    sourceSets["foss"].java.srcDirs("src/foss/kotlin")
+    sourceSets["play"].java.srcDirs("src/play/kotlin")
 }
 
 dependencies {

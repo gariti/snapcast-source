@@ -73,6 +73,11 @@ val SLOT_PORTS = listOf(4953, 4954, 4955, 4956)
 const val VIZ_PORT = 4900           // legacy TCP PCM viz path (snapcast-viz-tap)
 const val SPECTRUM_PORT = 4901      // Solo Listening UDP spectrum (phone-spectrum-tap)
 
+// Default target: the desktop's Tailscale MagicDNS name. The link rides the
+// tailnet (WireGuard-encrypted + device-authenticated) from anywhere; same-LAN
+// plain IP remains a manual opt-in by simply typing the LAN IP here instead.
+const val DEFAULT_HOST = "nixos-1.tailb7f992.ts.net"
+
 fun portToSlot(port: Int): Int? {
     val idx = SLOT_PORTS.indexOf(port)
     return if (idx >= 0) idx + 1 else null
@@ -113,7 +118,7 @@ class MainActivity : ComponentActivity() {
 
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val initialSlotIdx = prefs.getInt(KEY_SLOT, 0).coerceIn(0, SLOT_PORTS.size - 1)
-        val initialHost = prefs.getString(KEY_HOST, "192.168.0.163") ?: "192.168.0.163"
+        val initialHost = prefs.getString(KEY_HOST, DEFAULT_HOST) ?: DEFAULT_HOST
         val initialPartyMode = prefs.getBoolean(KEY_PARTY_MODE, false)
         val initialPsk = prefs.getString(KEY_PSK, "") ?: ""
 
@@ -278,7 +283,7 @@ fun SnapcastSourceScreen(
                 host = it
                 onHostChange(it)
             },
-            label = { Text("Snapserver host") },
+            label = { Text("Desktop host (MagicDNS name or IP)") },
             singleLine = true,
             enabled = editable,
             modifier = Modifier.fillMaxWidth()
@@ -533,6 +538,17 @@ fun CastDetectionCard(hostBlank: Boolean) {
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.outline,
+                )
+                Text(
+                    if (running2.linkConnected)
+                        "Link: control channel (authenticated, event-driven)"
+                    else
+                        "Link: legacy UDP beacon (control channel down — check pairing code / desktop)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (running2.linkConnected)
+                        Color(0xFF4CAF50)
+                    else
+                        MaterialTheme.colorScheme.outline,
                 )
             }
             if (!listenerState.listenerConnected) {
