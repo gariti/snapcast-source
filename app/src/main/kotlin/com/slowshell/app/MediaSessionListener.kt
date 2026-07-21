@@ -119,6 +119,15 @@ class MediaSessionListener : NotificationListenerService() {
             ?: ""
         val app = active?.packageName ?: ""
 
+        // Album-art URI. Streaming apps (Spotify, YT Music, Tidal…) expose an
+        // https:// CDN URL here that the desktop can load directly for full-res
+        // cover art; local/offline sources give a content:// URI the desktop
+        // can't resolve, so the desktop side only uses http(s) values.
+        val artUri = md?.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+            ?: md?.getString(MediaMetadata.METADATA_KEY_ART_URI)
+            ?: md?.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)
+            ?: ""
+
         // Volume: a remote (cast) session reports its target's volume here, so
         // setVolumeTo() on this controller adjusts the KEF/Chromecast volume.
         val pi = active?.playbackInfo
@@ -137,6 +146,7 @@ class MediaSessionListener : NotificationListenerService() {
             title = title,
             artist = artist,
             app = app,
+            artUri = artUri,
             volumePercent = percent,
             volumeMax = maxVol,
             volumeControllable = controllable,
@@ -151,6 +161,7 @@ class MediaSessionListener : NotificationListenerService() {
         val title: String = "",
         val artist: String = "",
         val app: String = "",
+        val artUri: String = "",
         val volumePercent: Int = 0,
         val volumeMax: Int = 0,
         val volumeControllable: Boolean = false,

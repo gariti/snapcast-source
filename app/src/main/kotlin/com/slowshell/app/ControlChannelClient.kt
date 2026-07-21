@@ -105,7 +105,7 @@ class ControlChannelClient(
         if (_state.value !is LinkState.Connected) return false
         return writeMutex.withLock {
             val key = listOf(
-                s.isPlaying, s.title, s.artist, s.app,
+                s.isPlaying, s.title, s.artist, s.app, s.artUri,
                 s.volumePercent, s.volumeControllable, s.volumeRemote,
             )
             if (lastNp == key) return@withLock true
@@ -116,6 +116,7 @@ class ControlChannelClient(
                     "title" to s.title.take(MAX_STR),
                     "artist" to s.artist.take(MAX_STR),
                     "app" to s.app.take(MAX_STR),
+                    "art" to s.artUri.take(MAX_URL),
                     "vol" to s.volumePercent.coerceIn(0, 100).toLong(),
                     "ctl" to s.volumeControllable,
                     "remote" to s.volumeRemote,
@@ -206,6 +207,15 @@ class ControlChannelClient(
             }
             _state.value = LinkState.Connected(proto, caps)
             Log.i(TAG, "linked to $host:$port proto=$proto caps=$caps")
+
+            // Resume/reconnect refresh: the desktop keeps whatever we last
+            // pushed, so a wake with no track change would leave it showing the
+            // OLD song. Dedup was just cleared above, so proactively re-push the
+            // current media + now-playing snapshot — the desktop syncs
+            // immediately instead of waiting for the next track change.
+            val snap = MediaSessionListener.state.value
+            sendMedia(snap.isPlaying, snap.sessionCount)
+            sendNowPlaying(snap)
         } catch (e: Exception) {
             runCatching { sock.close() }
             throw e
@@ -294,6 +304,8 @@ class ControlChannelClient(
         private const val CONNECT_TIMEOUT_MS = 8_000
         private const val HANDSHAKE_TIMEOUT_MS = 10_000
         private const val MAX_STR = 200
+        // Art URLs run longer than titles but must stay well under MAX_FRAME.
+        private const val MAX_URL = 1024
         private const val INITIAL_BACKOFF_MS = 5_000L
         private const val MAX_BACKOFF_MS = 300_000L
         private const val STABLE_CONNECTION_MS = 60_000L
