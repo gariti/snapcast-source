@@ -80,6 +80,16 @@ class MediaSessionListener : NotificationListenerService() {
                     ) ?: emptyList())
                 }
 
+                override fun onMetadataChanged(metadata: MediaMetadata?) {
+                    // Seamless track changes within a playlist keep the state at
+                    // PLAYING and only swap metadata, so onPlaybackStateChanged
+                    // may never fire — without this the desktop sticks on the
+                    // previous title/artist/art. Re-publish on every metadata swap.
+                    publishState(sessionManager?.getActiveSessions(
+                        ComponentName(this@MediaSessionListener, MediaSessionListener::class.java)
+                    ) ?: emptyList())
+                }
+
                 override fun onSessionDestroyed() {
                     controllerCallbacks.remove(c)
                     publishState(sessionManager?.getActiveSessions(
