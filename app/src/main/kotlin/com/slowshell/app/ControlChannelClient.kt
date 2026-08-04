@@ -106,6 +106,12 @@ class ControlChannelClient(
     private var lastMedia: Pair<Boolean, Int>? = null
     private var lastNp: List<Any?>? = null
 
+    /** Last resolved artwork, keyed by the URI it came from. */
+    private var artCache: Pair<String, ArtLoader.Art?>? = null
+
+    /** Art keys already shipped on THIS connection; cleared on disconnect. */
+    private val sentArtKeys = mutableSetOf<String>()
+
     fun start() {
         if (job?.isActive == true) return
         job = scope.launch(Dispatchers.IO) { runLoop() }
@@ -135,6 +141,13 @@ class ControlChannelClient(
     /** Push a now-playing change. Deduped on the visible fields. */
     suspend fun sendNowPlaying(s: MediaSessionListener.State): Boolean {
         if (_state.value !is LinkState.Connected) return false
+
+        // Resolve device-local artwork BEFORE taking the write lock: reading the
+        // provider and possibly re-encoding a JPEG is slow, and stalling every
+        // other frame behind it would make the link look wedged. Remote (http)
+        // art resolves to null here — the desktop fetches those URLs itself.
+        val art = resolveArt(s.artUri)
+
         return writeMutex.withLock {
             val key = listOf(
                 s.isPlaying, s.title, s.artist, s.app, s.artUri,
@@ -149,14 +162,70 @@ class ControlChannelClient(
                     "artist" to s.artist.take(MAX_STR),
                     "app" to s.app.take(MAX_STR),
                     "art" to s.artUri.take(MAX_URL),
+                    // Content hash of the blob that follows. The desktop keys its
+                    // art cache on this, so an unchanged cover costs one string.
+                    "artkey" to (art?.key ?: ""),
                     "vol" to s.volumePercent.coerceIn(0, 100).toLong(),
                     "ctl" to s.volumeControllable,
                     "remote" to s.volumeRemote,
                 )
             )
             if (ok) lastNp = key
+            // Ship the bytes after the np frame so the desktop already knows which
+            // key it is waiting for. Once per key per connection — the desktop
+            // caches to disk, and a reconnect re-sends (cheap, and far simpler
+            // than negotiating what the other side still has).
+            if (ok && art != null && sentArtKeys.add(art.key)) {
+                if (!sendArtLocked(art)) sentArtKeys.remove(art.key)
+            }
             ok
         }
+    }
+
+    /**
+     * Load artwork for [uri], reusing the last result when the URI is unchanged.
+     * Without this cache every now-playing tick (position, volume…) would re-read
+     * and re-hash the same cover.
+     */
+    private fun resolveArt(uri: String): ArtLoader.Art? {
+        if (!ArtLoader.isLocal(uri)) return null
+        artCache?.let { (cachedUri, cachedArt) -> if (cachedUri == uri) return cachedArt }
+        val art = ArtLoader.load(appContext, uri)
+        artCache = uri to art
+        return art
+    }
+
+    /**
+     * Send artwork as `{t:"art", key, i, n, d}` chunks. Caller must hold the write
+     * lock. Chunked rather than sent whole because MAX_FRAME is a deliberate
+     * anti-DoS bound on both ends — raising it for one bulk payload would weaken
+     * every other frame's guarantee.
+     */
+    private fun sendArtLocked(art: ArtLoader.Art): Boolean {
+        val total = (art.bytes.size + ART_CHUNK - 1) / ART_CHUNK
+        if (total <= 0 || total > ART_MAX_CHUNKS) {
+            Log.w(TAG, "art ${art.key} needs $total chunks, refusing")
+            return false
+        }
+        for (i in 0 until total) {
+            val from = i * ART_CHUNK
+            val to = minOf(from + ART_CHUNK, art.bytes.size)
+            val ok = writeFrameLocked(
+                mapOf(
+                    "t" to "art",
+                    "key" to art.key,
+                    "i" to i.toLong(),
+                    "n" to total.toLong(),
+                    "d" to art.bytes.copyOfRange(from, to),
+                )
+            )
+            if (!ok) {
+                Log.w(TAG, "art ${art.key} send failed at chunk $i/$total")
+                return false
+            }
+        }
+        Log.i(TAG, "sent art ${art.key} (${art.bytes.size}B in $total chunks)")
+        return true
     }
 
     // ---- connection loop --------------------------------------------------
@@ -364,6 +433,11 @@ class ControlChannelClient(
             output = session.output
             lastMedia = null
             lastNp = null
+            // The desktop's art cache is per-run, and a fresh daemon has an empty
+            // one — so treat every connection as needing the blob re-sent. The
+            // artCache (URI -> bytes) survives; only the "already shipped" set
+            // resets, so this costs a re-send, not a re-decode.
+            sentArtKeys.clear()
         }
         lastGood = session.host
         _state.value = LinkState.Connected(session.proto, session.caps)
@@ -475,7 +549,17 @@ class ControlChannelClient(
         private val DOMAIN_CLI = "slink-cli".toByteArray(Charsets.US_ASCII)
         // Capabilities this app version speaks. The custom link is flavor-
         // INDEPENDENT — both foss and play ship exactly these.
-        private val CLIENT_CAPS = listOf("media", "np", "cmd", "spectrum-udp", "pcm-party")
+        private val CLIENT_CAPS = listOf("media", "np", "cmd", "spectrum-udp", "pcm-party", "art")
+
+        /**
+         * Art chunk payload. Must leave room for the frame's other keys inside
+         * MAX_FRAME — the map overhead ("t"/"key"/"i"/"n"/"d" plus the 16-char
+         * key) is well under 100 bytes, so 3072 has ample margin.
+         */
+        private const val ART_CHUNK = 3072
+
+        /** Ceiling on chunks per cover; ART_CHUNK * this bounds the transfer. */
+        private const val ART_MAX_CHUNKS = 512
 
         // Mirror CommandUdpListener's capture-gating opcodes.
         private const val CMD_PAUSE_CAPTURE = 7
