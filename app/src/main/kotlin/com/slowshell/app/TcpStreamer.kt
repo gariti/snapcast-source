@@ -1,10 +1,10 @@
 package com.slowshell.app
 
+import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -12,21 +12,26 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.io.OutputStream
+import java.net.InetSocketAddress
 import java.net.Socket
 
 /**
  * Streams PCM to the desktop over TCP. [write] is called from the audio capture
  * thread on every buffer, so it MUST NOT block: a failed/absent connection
- * schedules an asynchronous reconnect on [scope] (with exponential backoff) and
- * the audio thread simply drops frames until the link is back. UI state copies
- * (bytesSent/rms) are throttled to ~1 Hz so the high-frequency stream doesn't
- * trigger a Compose recomposition on every audio buffer.
+ * schedules an asynchronous reconnect on [scope] (with exponential backoff, cut
+ * short by any network change — see NetworkMonitor) and the audio thread simply
+ * drops frames until the link is back. UI state copies (bytesSent/rms) are
+ * throttled to ~1 Hz so the high-frequency stream doesn't trigger a Compose
+ * recomposition on every audio buffer.
  */
 class TcpStreamer(
+    context: Context,
     private val host: String,
     private val port: Int,
     private val scope: CoroutineScope,
 ) {
+    private val appContext = context.applicationContext
+
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
@@ -51,11 +56,14 @@ class TcpStreamer(
             ConnectionState.Reconnecting(host, port, attempt, lastErr)
         }
 
+        // Bounded connect: `Socket(host, port)` waits out the OS-level SYN
+        // timeout (minutes) on a black-holed route, which stalls the retry loop
+        // exactly when the route is dead and retries matter most.
+        val s = Socket()
         try {
-            val s = Socket(host, port).apply {
-                tcpNoDelay = true
-                soTimeout = 5_000
-            }
+            s.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+            s.tcpNoDelay = true
+            s.soTimeout = 5_000
             socket = s
             out = s.getOutputStream()
             backoffMs = INITIAL_BACKOFF_MS
@@ -63,6 +71,7 @@ class TcpStreamer(
             _state.value = ConnectionState.Connected(host, port, totalBytesSent, lastRms)
             Log.i(TAG, "Connected to $host:$port")
         } catch (e: IOException) {
+            runCatching { s.close() }
             val reason = categorizeIoError(e.message)
             Log.w(TAG, "Connect failed: $reason")
             _state.value = ConnectionState.Reconnecting(host, port, attempt, reason)
@@ -106,10 +115,22 @@ class TcpStreamer(
         close()
         _state.value = ConnectionState.Reconnecting(host, port, attempt, reason)
         reconnectJob = scope.launch(Dispatchers.IO) {
-            while (isActive && out == null) {
-                delay(backoffMs)
-                backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
-                connect()
+            // Same blindness the control channel had: a timer-only loop ignores
+            // the VPN/Wi-Fi coming back. Wake on either.
+            val network = NetworkMonitor.subscribe(appContext)
+            try {
+                while (isActive && out == null) {
+                    if (network.awaitChange(backoffMs)) {
+                        Log.i(TAG, "network changed — reconnecting now")
+                        backoffMs = INITIAL_BACKOFF_MS
+                    } else {
+                        backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
+                    }
+                    network.drainPending()
+                    connect()
+                }
+            } finally {
+                network.close()
             }
         }
     }
@@ -137,6 +158,7 @@ class TcpStreamer(
 
     companion object {
         private const val TAG = "TcpStreamer"
+        private const val CONNECT_TIMEOUT_MS = 8_000
         private const val INITIAL_BACKOFF_MS = 250L
         private const val MAX_BACKOFF_MS = 5_000L
         private const val UI_UPDATE_MS = 1_000L

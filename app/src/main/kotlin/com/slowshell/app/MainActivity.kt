@@ -219,6 +219,12 @@ class MainActivity : ComponentActivity() {
             if (provisional.isNotBlank()) putString(KEY_HOST, provisional)
             apply()
         }
+        // Keep the LAN addresses too, don't just verify and discard them: the
+        // control channel races them against the tailnet name on every
+        // reconnect, which is what keeps the link alive at home when the tunnel
+        // drops. The primary stays the tailnet name — it is the one that also
+        // works away from home.
+        LinkHosts.storeLan(this, lanHosts)
         _pairStatus.value = "QR scanned — verifying desktop…"
 
         val appCtx = applicationContext
@@ -233,7 +239,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
             if (chosen != null) {
-                prefs.edit().putString(KEY_HOST, chosen).apply()
+                // Only fall back to storing the LAN winner as the primary when
+                // there is no tailnet name at all. Otherwise the tailnet name
+                // stays primary even if it didn't answer just now (the tunnel
+                // may simply be down) — it is the address that works away from
+                // home, and the LAN winner is already a raced candidate.
+                if (tsHost.isBlank()) prefs.edit().putString(KEY_HOST, chosen).apply()
                 val via = if (chosen == tsHost) "Tailscale" else "LAN"
                 _pairStatus.value = "Paired ✓ — desktop at $chosen ($via)"
                 // Bounce the beacon so it picks up the new host + code now.
@@ -535,6 +546,10 @@ fun DiscoveryCard(
                     }
                     status = if (paired != null) {
                         onHostResolved(paired)
+                        // mDNS only ever finds it on the local network, and the
+                        // PSK challenge above proved it is really the desktop —
+                        // so this is a LAN candidate worth racing later.
+                        LinkHosts.addLan(context, paired)
                         "Paired ✓ — desktop at $paired"
                     } else {
                         "Found a desktop but the pairing code didn't match. " +

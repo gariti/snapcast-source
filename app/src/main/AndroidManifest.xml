@@ -12,6 +12,11 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- ConnectivityManager.registerNetworkCallback (NetworkMonitor): the reconnect
+         loops re-dial the moment a network appears — notably the Tailscale tunnel
+         the desktop is reached over — instead of sitting out an exponential backoff
+         that may already be at its 5-minute ceiling. Normal permission, no prompt. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- mDNS/Zeroconf desktop discovery (NsdManager). -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />

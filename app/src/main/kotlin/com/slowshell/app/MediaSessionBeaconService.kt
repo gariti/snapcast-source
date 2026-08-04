@@ -102,9 +102,14 @@ class MediaSessionBeaconService : LifecycleService() {
         // the legacy UDP path below covers that case.
         if (link == null) {
             Log.i(TAG, "flavor=${FlavorFeatures.flavor} push=${FlavorFeatures.pushBackend}")
+            // Every known address, raced — the link must survive Tailscale
+            // dropping while at home, where the LAN address still works.
+            val linkHosts = LinkHosts.all(this)
+            Log.i(TAG, "link candidates: ${linkHosts.joinToString(", ")}")
             link = ControlChannelClient(
+                context = this,
                 scope = lifecycleScope,
-                host = host,
+                hosts = linkHosts,
                 port = ControlChannelClient.PORT_DEFAULT,
                 normalizedPsk = readPskPref(),
             ).also { it.start() }
@@ -211,11 +216,13 @@ class MediaSessionBeaconService : LifecycleService() {
         return null
     }
 
-    private fun readHostPref(): String {
-        // Mirror MainActivity's prefs constants — keep in sync.
-        val prefs = getSharedPreferences("slowshell_app_prefs", Context.MODE_PRIVATE)
-        return prefs.getString("host", "") ?: ""
-    }
+    /**
+     * The single primary host — still what the legacy UDP sinks and the command
+     * listener use. Only the control channel races the full candidate list
+     * (see LinkHosts): the UDP paths are unauthenticated, so "whichever address
+     * answers" is not a question they may safely ask.
+     */
+    private fun readHostPref(): String = LinkHosts.primary(this)
 
     private fun readPskPref(): String {
         val prefs = getSharedPreferences("slowshell_app_prefs", Context.MODE_PRIVATE)

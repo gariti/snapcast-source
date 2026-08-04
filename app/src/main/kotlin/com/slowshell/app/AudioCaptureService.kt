@@ -133,7 +133,7 @@ class AudioCaptureService : LifecycleService() {
         port: Int,
         bufSize: Int,
     ) {
-        val tcp = TcpStreamer(host, port, lifecycleScope)
+        val tcp = TcpStreamer(this, host, port, lifecycleScope)
         streamer = tcp
 
         captureJob = lifecycleScope.launch(Dispatchers.IO) {
