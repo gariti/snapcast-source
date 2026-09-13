@@ -79,6 +79,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -293,7 +295,43 @@ fun DesktopScreen(ready: Boolean) {
 
 @Composable
 fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
-    val bmp = frame?.bitmap
+    // The picture on screen is decoupled from the newest frame so a swipe can
+    // slide the OLD window out and the NEW one in: `shown` is what we draw,
+    // `offset` is its horizontal translation in px, `awaitingWin` is set while
+    // we wait for the first frame of a different window after a swipe.
+    var shown by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    val offset = remember { androidx.compose.animation.core.Animatable(0f) }
+    var awaitingFrom by remember { mutableStateOf<Long?>(null) }
+    var swipeDir by remember { mutableStateOf(0) }
+    var widthPx by remember { mutableStateOf(1f) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(frame) {
+        val f = frame ?: run { shown = null; return@LaunchedEffect }
+        val waiting = awaitingFrom
+        if (waiting != null && f.win != waiting) {
+            // The next window's first picture: bring it in from the far side.
+            awaitingFrom = null
+            shown = f.bitmap
+            offset.snapTo(swipeDir * widthPx)
+            offset.animateTo(0f, androidx.compose.animation.core.tween(240, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+        } else if (waiting == null) {
+            shown = f.bitmap
+        }
+    }
+    // No other window answered the swipe: put the picture back.
+    LaunchedEffect(awaitingFrom) {
+        if (awaitingFrom != null) {
+            kotlinx.coroutines.delay(700)
+            if (awaitingFrom != null) {
+                awaitingFrom = null
+                frame?.let { shown = it.bitmap }
+                offset.animateTo(0f, androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMedium))
+            }
+        }
+    }
+
+    val bmp = shown
     val ratio = if (bmp != null && bmp.height > 0) bmp.width.toFloat() / bmp.height.toFloat() else 16f / 10f
     Box(
         Modifier
@@ -301,10 +339,29 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
             .clip(RoundedCornerShape(6.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))
-            .mirrorGestures(enabled),
+            .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
+            .mirrorGestures(
+                enabled = enabled,
+                onFollow = { dx -> scope.launch { offset.snapTo(dx * 0.85f) } },
+                onSwipe = { dir ->
+                    // dir = -1: content goes left (next window), +1: right (previous).
+                    swipeDir = -dir
+                    awaitingFrom = frame?.win ?: -1L
+                    scope.launch {
+                        offset.animateTo(dir * widthPx, androidx.compose.animation.core.tween(160, easing = androidx.compose.animation.core.FastOutLinearInEasing))
+                    }
+                },
+                onLetGo = {
+                    scope.launch { offset.animateTo(0f, androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMedium)) }
+                },
+            ),
     ) {
         if (bmp != null) {
-            Image(bmp.asImageBitmap(), contentDescription = "desktop mirror", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+            Image(
+                bmp.asImageBitmap(), contentDescription = "desktop mirror",
+                modifier = Modifier.fillMaxSize().graphicsLayer { translationX = offset.value },
+                contentScale = ContentScale.FillBounds,
+            )
         } else {
             Text(
                 if (enabled) "waiting for the first frame…" else "mirror off",
@@ -321,8 +378,15 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
  *   swipe ← / →    focus the next / previous window — the mirror follows focus,
  *                  so the picture switches with it (every window in a column
  *                  counts, not just columns)
+ * `onFollow` gets the horizontal displacement while a swipe is forming,
+ * `onSwipe` its direction once committed, `onLetGo` a release without one.
  */
-private fun Modifier.mirrorGestures(enabled: Boolean): Modifier = this.pointerInput(enabled) {
+private fun Modifier.mirrorGestures(
+    enabled: Boolean,
+    onFollow: (Float) -> Unit,
+    onSwipe: (Int) -> Unit,
+    onLetGo: () -> Unit,
+): Modifier = this.pointerInput(enabled) {
     if (!enabled) return@pointerInput
     val slop = viewConfiguration.touchSlop
     val swipeMin = 72.dp.toPx()
@@ -337,6 +401,7 @@ private fun Modifier.mirrorGestures(enabled: Boolean): Modifier = this.pointerIn
         var moved = false
         var dragging = false
         var swiped = false
+        var following = false
         while (true) {
             val ev = withTimeoutOrNull(16L) { awaitPointerEvent() }
             val now = System.currentTimeMillis()
@@ -373,6 +438,7 @@ private fun Modifier.mirrorGestures(enabled: Boolean): Modifier = this.pointerIn
                             lastTapAt = now
                         }
                     }
+                    following -> onLetGo()
                 }
                 break
             }
@@ -382,10 +448,18 @@ private fun Modifier.mirrorGestures(enabled: Boolean): Modifier = this.pointerIn
             if (!moved && (abs(dx) > slop || abs(dy) > slop)) moved = true
             if (dragging) {
                 Link.pointerIn(pos.x / size.width, pos.y / size.height)
-            } else if (!swiped && moved && now - t0 < 600 && abs(dx) > swipeMin && abs(dx) > 2 * abs(dy)) {
-                swiped = true
-                // Content follows the finger: swipe left shows what is to the right.
-                Link.act(JSONObject().put(if (dx < 0) "FocusWindowDownOrColumnRight" else "FocusWindowUpOrColumnLeft", JSONObject()))
+            } else if (!swiped && moved) {
+                // Mostly-horizontal motion drags the picture with the finger.
+                if (abs(dx) > abs(dy)) {
+                    following = true
+                    onFollow(dx)
+                }
+                if (now - t0 < 600 && abs(dx) > swipeMin && abs(dx) > 2 * abs(dy)) {
+                    swiped = true
+                    // Content follows the finger: swipe left shows what is to the right.
+                    Link.act(JSONObject().put(if (dx < 0) "FocusWindowDownOrColumnRight" else "FocusWindowUpOrColumnLeft", JSONObject()))
+                    onSwipe(if (dx < 0) -1 else 1)
+                }
             }
         }
     }
