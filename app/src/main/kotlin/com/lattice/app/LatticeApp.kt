@@ -9,6 +9,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -299,38 +301,7 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
             .clip(RoundedCornerShape(6.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))
-            .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
-                detectTapGestures(
-                    onTap = { p ->
-                        Link.pointerIn(p.x / size.width, p.y / size.height)
-                        Link.click("left")
-                    },
-                    onDoubleTap = { p ->
-                        Link.pointerIn(p.x / size.width, p.y / size.height)
-                        Link.click("left"); Link.click("left")
-                    },
-                    onLongPress = { p ->
-                        Link.pointerIn(p.x / size.width, p.y / size.height)
-                        Link.click("right")
-                    },
-                )
-            }
-            .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
-                // Press-and-drag = left button held while the pointer follows.
-                detectDragGestures(
-                    onDragStart = { p ->
-                        Link.pointerIn(p.x / size.width, p.y / size.height)
-                        Link.button("left", true)
-                    },
-                    onDrag = { change, _ ->
-                        Link.pointerIn(change.position.x / size.width, change.position.y / size.height)
-                    },
-                    onDragEnd = { Link.button("left", false) },
-                    onDragCancel = { Link.button("left", false) },
-                )
-            },
+            .mirrorGestures(enabled),
     ) {
         if (bmp != null) {
             Image(bmp.asImageBitmap(), contentDescription = "desktop mirror", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
@@ -339,6 +310,83 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
                 if (enabled) "waiting for the first frame…" else "mirror off",
                 Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.labelMedium,
             )
+        }
+    }
+}
+
+/**
+ * One gesture vocabulary for the mirror, resolved from a single touch:
+ *   tap            click where you tapped        double tap   double click
+ *   long press     right click                   long press + move   drag (left held)
+ *   swipe ← / →    focus the next / previous window — the mirror follows focus,
+ *                  so the picture switches with it (every window in a column
+ *                  counts, not just columns)
+ */
+private fun Modifier.mirrorGestures(enabled: Boolean): Modifier = this.pointerInput(enabled) {
+    if (!enabled) return@pointerInput
+    val slop = viewConfiguration.touchSlop
+    val swipeMin = 72.dp.toPx()
+    val longPressMs = 350L
+    var lastTapAt = 0L
+    awaitEachGesture {
+        val down = awaitFirstDown()
+        down.consume()
+        val start = down.position
+        val t0 = System.currentTimeMillis()
+        var pos = start
+        var moved = false
+        var dragging = false
+        var swiped = false
+        while (true) {
+            val ev = withTimeoutOrNull(16L) { awaitPointerEvent() }
+            val now = System.currentTimeMillis()
+            if (ev == null) {
+                // Still pressed, nothing new: a long press becomes a drag the
+                // moment the finger moves, or a right click if it never does.
+                if (!moved && !dragging && now - t0 > longPressMs) {
+                    Link.pointerIn(start.x / size.width, start.y / size.height)
+                    Link.button("left", true)
+                    dragging = true
+                }
+                continue
+            }
+            val ch = ev.changes.firstOrNull() ?: continue
+            ch.consume()
+            if (!ch.pressed) {
+                // Finger up: decide what the touch was.
+                when {
+                    swiped -> {}
+                    dragging -> {
+                        Link.button("left", false)
+                        if (!moved) {
+                            // Long press without motion: a right click, not a drag.
+                            Link.click("right")
+                        }
+                    }
+                    !moved -> {
+                        Link.pointerIn(start.x / size.width, start.y / size.height)
+                        if (now - lastTapAt < 300) {
+                            Link.click("left"); Link.click("left")
+                            lastTapAt = 0
+                        } else {
+                            Link.click("left")
+                            lastTapAt = now
+                        }
+                    }
+                }
+                break
+            }
+            pos = ch.position
+            val dx = pos.x - start.x
+            val dy = pos.y - start.y
+            if (!moved && (abs(dx) > slop || abs(dy) > slop)) moved = true
+            if (dragging) {
+                Link.pointerIn(pos.x / size.width, pos.y / size.height)
+            } else if (!swiped && moved && now - t0 < 600 && abs(dx) > swipeMin && abs(dx) > 2 * abs(dy)) {
+                swiped = true
+                // Content follows the finger: swipe left shows what is to the right.
+                Link.act(JSONObject().put(if (dx < 0) "FocusWindowDownOrColumnRight" else "FocusWindowUpOrColumnLeft", JSONObject()))
+            }
         }
     }
 }
