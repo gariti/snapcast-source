@@ -5,15 +5,15 @@ plugins {
 }
 
 android {
-    namespace = "com.slowshell.app"
+    namespace = "com.lattice.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.slowshell.app"
+        applicationId = "com.lattice.app"
         minSdk = 29
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 10
+        versionName = "1.0.0"
     }
 
     // Two distribution flavors, IDENTICAL for the custom link (control channel
@@ -21,7 +21,7 @@ android {
     // whose push transport and restricted-permission strategy must diverge:
     //   foss -> UnifiedPush, may request telephony/all-files perms later
     //   play -> FCM, Play-policy-safe permission set only
-    // Per-flavor behavior goes through com.slowshell.app.features.FlavorFeatures
+    // Per-flavor behavior goes through com.lattice.app.features.FlavorFeatures
     // (one impl per flavor source set) — never `if (BuildConfig.FLAVOR == ...)`.
     flavorDimensions += "distribution"
     productFlavors {

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A lattice: nine tiles, the focused one lit. Drawn inside the 66% safe zone
+     of the 108 dp adaptive canvas (tiles span 30..78). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group>
+        <path android:fillColor="#417273" android:pathData="M30,30h12v12h-12z M48,30h12v12h-12z M66,30h12v12h-12z M30,48h12v12h-12z M66,48h12v12h-12z M30,66h12v12h-12z M48,66h12v12h-12z M66,66h12v12h-12z"/>
+        <path android:fillColor="#7DD7DB" android:pathData="M47,47h14v14h-14z"/>
+    </group>
+</vector>

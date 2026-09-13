@@ -1,2 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<full-backup-content />
+<!-- Android 11 and below. The pairing key never rides a backup: a restored
+     phone re-pairs by QR. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="lattice_prefs.xml" />
+</full-backup-content>

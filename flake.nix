@@ -1,5 +1,5 @@
 {
-  description = "Snapcast Source — Android dev shell (JDK + Gradle + Android SDK)";
+  description = "Lattice (Android companion) — dev shell (JDK + Gradle + Android SDK)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -56,7 +56,7 @@
           fi
 
           cat <<EOF
-        snapcast-source dev shell
+        Lattice app dev shell
           JDK:          $JAVA_HOME
           ANDROID_HOME: $ANDROID_HOME
           adb:          $(command -v adb)

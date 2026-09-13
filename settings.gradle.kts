@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SlowshellApp"
+rootProject.name = "LatticeApp"
 include(":app")
