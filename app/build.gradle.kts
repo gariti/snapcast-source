@@ -36,7 +36,12 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 + resource shrinking: material-icons-extended alone is ~50 MB
+            // unshrunk, and the sideload path caps at 30 MB. Signed with the
+            // debug key so `adb install -r` / a sideload upgrades in place.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
