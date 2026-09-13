@@ -340,7 +340,7 @@ class AudioCaptureService : LifecycleService() {
         val notif: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Lattice")
             .setContentText("Streaming system audio")
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_stat_lattice)
             .setContentIntent(contentPi)
             .setOngoing(true)
             .build()

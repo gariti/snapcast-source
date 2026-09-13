@@ -59,6 +59,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -138,31 +144,22 @@ class MainActivity : ComponentActivity() {
             prefs.edit().putString(KEY_HOST, initialHost).apply()
         }
 
+        val appState = AppState(
+            host = initialHost, slotIndex = initialSlotIdx, partyMode = initialPartyMode, psk = initialPsk,
+            onHostChange = { host -> prefs.edit().putString(KEY_HOST, host).apply() },
+            onSlotChange = { idx -> prefs.edit().putInt(KEY_SLOT, idx).apply() },
+            onPartyModeChange = { enabled -> prefs.edit().putBoolean(KEY_PARTY_MODE, enabled).apply() },
+            // Store the canonical (normalized) code so the HMAC key matches the
+            // desktop byte-for-byte.
+            onPskChange = { psk -> prefs.edit().putString(KEY_PSK, PairingCrypto.normalize(psk)).apply() },
+            onStartCapture = ::startCapture,
+            onStopCapture = ::stopCapture,
+        )
+
         setContent {
-            MaterialTheme {
+            LatticeTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    SnapcastSourceScreen(
-                        initialHost = initialHost,
-                        initialSlotIndex = initialSlotIdx,
-                        initialPartyMode = initialPartyMode,
-                        initialPsk = initialPsk,
-                        onSlotChange = { idx ->
-                            prefs.edit().putInt(KEY_SLOT, idx).apply()
-                        },
-                        onHostChange = { host ->
-                            prefs.edit().putString(KEY_HOST, host).apply()
-                        },
-                        onPskChange = { psk ->
-                            // Store the canonical (normalized) code so the HMAC
-                            // key matches the desktop byte-for-byte.
-                            prefs.edit().putString(KEY_PSK, PairingCrypto.normalize(psk)).apply()
-                        },
-                        onPartyModeChange = { enabled ->
-                            prefs.edit().putBoolean(KEY_PARTY_MODE, enabled).apply()
-                        },
-                        onStart = ::startCapture,
-                        onStop = ::stopCapture
-                    )
+                    LatticeApp(appState)
                 }
             }
         }
@@ -286,23 +283,8 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun SnapcastSourceScreen(
-    initialHost: String,
-    initialSlotIndex: Int,
-    initialPartyMode: Boolean,
-    initialPsk: String,
-    onSlotChange: (Int) -> Unit,
-    onHostChange: (String) -> Unit,
-    onPskChange: (String) -> Unit,
-    onPartyModeChange: (Boolean) -> Unit,
-    onStart: (String, Int, String) -> Unit,
-    onStop: () -> Unit
-) {
-    var host by remember { mutableStateOf(initialHost) }
-    var slotIndex by remember { mutableIntStateOf(initialSlotIndex) }
-    var partyMode by remember { mutableStateOf(initialPartyMode) }
-    var psk by remember { mutableStateOf(initialPsk) }
-
+fun AudioScreen(app: AppState) {
+    val host = app.host
     val state by AudioCaptureService.state.collectAsState()
     val streaming = state !is ConnectionState.Idle && state !is ConnectionState.Failed
     val editable = !streaming
@@ -369,97 +351,58 @@ fun SnapcastSourceScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            text = "Lattice",
-            style = MaterialTheme.typography.headlineMedium
-        )
+        NowPlayingCard()
+        HeadphonesCard()
 
-        OutlinedTextField(
-            value = host,
-            onValueChange = {
-                host = it
-                onHostChange(it)
-            },
-            label = { Text("Desktop host (MagicDNS name or IP)") },
-            singleLine = true,
-            enabled = editable,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        DiscoveryCard(
-            psk = psk,
-            enabled = editable,
-            onPskChange = {
-                psk = it
-                onPskChange(it)
-            },
-            onHostResolved = { resolvedIp ->
-                host = resolvedIp
-                onHostChange(resolvedIp)
-            },
-        )
-
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-            Text("Mode", style = MaterialTheme.typography.labelMedium)
+        SectionCard("Send audio to the desktop") {
             ModePicker(
-                partyMode = partyMode,
+                partyMode = app.partyMode,
                 enabled = editable,
                 onSelect = { isParty ->
-                    partyMode = isParty
-                    onPartyModeChange(isParty)
+                    app.partyMode = isParty
+                    app.onPartyModeChange(isParty)
                 }
             )
             Text(
-                if (partyMode)
-                    "Party — broadcast PCM to snapserver speakers"
+                if (app.partyMode)
+                    "Party — broadcast this phone's audio to the snapserver speakers"
                 else
-                    "Solo — on-device FFT, UDP spectrum to laptop visualizer",
+                    "Solo — on-device FFT, spectrum to the desktop visualizer",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline,
             )
-        }
-
-        if (partyMode) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    "Slot (party-mode lane)",
-                    style = MaterialTheme.typography.labelMedium
-                )
+            if (app.partyMode) {
+                Text("Slot (party-mode lane)", style = MaterialTheme.typography.labelMedium)
                 SlotPicker(
-                    selectedIndex = slotIndex,
+                    selectedIndex = app.slotIndex,
                     enabled = editable,
                     onSelect = {
-                        slotIndex = it
-                        onSlotChange(it)
+                        app.slotIndex = it
+                        app.onSlotChange(it)
                     }
                 )
+                MediaVolumeSlider()
             }
-            MediaVolumeSlider()
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(
+                    onClick = {
+                        val port = if (app.partyMode) SLOT_PORTS[app.slotIndex] else SPECTRUM_PORT
+                        val mode = if (app.partyMode) "party" else "solo"
+                        app.onStartCapture(host, port, mode)
+                    },
+                    enabled = !streaming
+                ) { Text("Start") }
+
+                OutlinedButton(
+                    onClick = app.onStopCapture,
+                    enabled = streaming
+                ) { Text("Stop") }
+            }
+            StatusCard(state)
         }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(
-                onClick = {
-                    val port = if (partyMode) SLOT_PORTS[slotIndex] else SPECTRUM_PORT
-                    val mode = if (partyMode) "party" else "solo"
-                    onStart(host, port, mode)
-                },
-                enabled = !streaming
-            ) { Text("Start") }
-
-            OutlinedButton(
-                onClick = onStop,
-                enabled = streaming
-            ) { Text("Stop") }
-        }
-
-        StatusCard(state)
-
-        CastDetectionCard(hostBlank = host.isBlank())
 
         ClientsCard(
             status = snapStatus,
@@ -469,6 +412,121 @@ fun SnapcastSourceScreen(
             onSetStream = ::setClientStream,
             onToggleMute = ::toggleClientMute
         )
+        Spacer(Modifier.height(72.dp))
+    }
+}
+
+@Composable
+fun NowPlayingCard() {
+    val ms by MediaSessionListener.state.collectAsState()
+    if (ms.title.isBlank() && ms.artist.isBlank()) return
+    SectionCard("Now playing on this phone") {
+        Text(ms.title.ifBlank { "—" }, style = MaterialTheme.typography.titleMedium, maxLines = 2)
+        Text(
+            listOf(ms.artist, ms.app).filter { it.isNotBlank() }.joinToString(" · "),
+            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { MediaSessionListener.applyCommand(MediaSessionListener.CMD_PREV, 0) }, modifier = Modifier.weight(1f)) { Text("⏮") }
+            Button(onClick = { MediaSessionListener.applyCommand(MediaSessionListener.CMD_PLAY_PAUSE, 0) }, modifier = Modifier.weight(1f)) { Text(if (ms.isPlaying) "⏸" else "▶") }
+            OutlinedButton(onClick = { MediaSessionListener.applyCommand(MediaSessionListener.CMD_NEXT, 0) }, modifier = Modifier.weight(1f)) { Text("⏭") }
+        }
+        if (ms.volumeRemote) DimText("Playing on a cast target — volume is the target's.")
+    }
+}
+
+@Composable
+fun HeadphonesCard() {
+    val ctx = LocalContext.current
+    val route by AudioRouteMonitor.route.collectAsState()
+    val listening by ListenService.active.collectAsState()
+    val client by Link.client.collectAsState()
+    val ready = client?.sessionReady == true
+    val askBt = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { AudioRouteMonitor.refresh(ctx) }
+    SectionCard("On your ears") {
+        val what = when (route.out) {
+            "bt" -> "🎧 ${route.name}" + (route.battery?.let { " · $it%" } ?: "")
+            "wired" -> "🎧 ${route.name}"
+            "usb" -> "🎧 ${route.name}"
+            else -> "🔈 Phone speaker"
+        }
+        Text(what, style = MaterialTheme.typography.titleMedium)
+        DimText("The desktop's status bar shows this too.")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Listen to the desktop", style = MaterialTheme.typography.labelLarge)
+                DimText(if (ready) "Desktop audio plays here, ~half a second behind." else "Needs the desktop bridge.")
+            }
+            Switch(checked = listening, enabled = ready, onCheckedChange = { ListenService.set(ctx, it) })
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !AudioRouteMonitor.hasBtPermission(ctx)) {
+            TextButton(onClick = { askBt.launch(Manifest.permission.BLUETOOTH_CONNECT) }) { Text("Allow Bluetooth to show the headset name and battery") }
+        }
+    }
+}
+
+@Composable
+fun SettingsScreen(app: AppState) {
+    val state by AudioCaptureService.state.collectAsState()
+    val streaming = state !is ConnectionState.Idle && state !is ConnectionState.Failed
+    val editable = !streaming
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        OutlinedTextField(
+            value = app.host,
+            onValueChange = {
+                app.host = it
+                app.onHostChange(it)
+            },
+            label = { Text("Desktop host (MagicDNS name or IP)") },
+            singleLine = true,
+            enabled = editable,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        DiscoveryCard(
+            psk = app.psk,
+            enabled = editable,
+            onPskChange = {
+                app.psk = it
+                app.onPskChange(it)
+            },
+            onHostResolved = { resolvedIp ->
+                app.host = resolvedIp
+                app.onHostChange(resolvedIp)
+            },
+        )
+
+        CastDetectionCard(hostBlank = app.host.isBlank())
+        LinkDiagnosticsCard()
+        Spacer(Modifier.height(72.dp))
+    }
+}
+
+@Composable
+fun LinkDiagnosticsCard() {
+    val client by Link.client.collectAsState()
+    val st by (client?.state ?: kotlinx.coroutines.flow.MutableStateFlow(ControlChannelClient.LinkState.Disconnected)).collectAsState()
+    val bridge by (client?.bridgeUp ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
+    val desk by Link.desk.collectAsState()
+    SectionCard("Link") {
+        val conn = st as? ControlChannelClient.LinkState.Connected
+        TextRow("channel", when (st) {
+            is ControlChannelClient.LinkState.Connected -> "up"
+            ControlChannelClient.LinkState.Connecting -> "connecting"
+            else -> "down"
+        })
+        TextRow("protocol", conn?.proto?.toString() ?: "—")
+        TextRow("desktop bridge", if (bridge) "up" else "down")
+        TextRow("desktop caps", conn?.caps?.sorted()?.joinToString(" ") ?: "—")
+        TextRow("outputs", desk.outputs.joinToString(" ") { it.name })
+        TextRow("workspaces · windows", "${desk.workspaces.size} · ${desk.windows.size}")
+        DimText("Re-pair any time: Mod+? › Network › Pair a Phone on the desktop, then scan the QR with the camera.")
     }
 }
 

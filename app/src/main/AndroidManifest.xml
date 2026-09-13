@@ -20,6 +20,12 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- mDNS/Zeroconf desktop discovery (NsdManager). -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Dictation: the phone is the desktop's microphone (DictationService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Listen to desktop: desktop audio plays here (ListenService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Headphone awareness: the Bluetooth headset's name and battery level. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <application
         android:allowBackup="true"
@@ -80,6 +86,29 @@
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <service
+            android:name=".DictationService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <service
+            android:name=".ListenService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- Quick Settings tile: the dictation hotkey, one swipe from anywhere. -->
+        <service
+            android:name=".DictationTile"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_mic"
+            android:label="Dictate"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="false" />
+        </service>
 
         <service
             android:name=".MediaSessionListener"

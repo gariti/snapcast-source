@@ -10,6 +10,8 @@ import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,8 +35,9 @@ import javax.crypto.spec.SecretKeySpec
  * connection to the desktop's phone-link daemon (port 4906) that replaces the
  * legacy control-plane UDP zoo (4902 beacon / 4903 now-playing / 4904 commands).
  *
- * Framing: 4-byte big-endian length (1..4096) + definite-length CBOR map with
- * text keys; the "t" key is the message type. Unknown types are ignored on both
+ * Framing: 4-byte big-endian length + definite-length CBOR map with text
+ * keys; the "t" key is the message type. The cap is 4096 until a proto-2
+ * session is authenticated, then 256 KiB. Unknown types are ignored on both
  * sides (version tolerance).
  *
  * Handshake (mutual auth on the QR-pairing PSK — see PairingCrypto):
@@ -399,7 +402,7 @@ class ControlChannelClient(
                 "caps" to CLIENT_CAPS,
                 "nonce" to myNonce,
             ))
-            val hello = readFrame(input)
+            val hello = readFrame(input, MAX_FRAME_V1)
             if (hello["t"] != "hello") throw Exception("expected hello, got ${hello["t"]}")
             val proto = minOf(hello["proto"] as? Long ?: 0L, PROTO_VERSION)
             if (proto < 1) throw Exception("no common protocol version")
@@ -411,7 +414,7 @@ class ControlChannelClient(
                 throw Exception("desktop failed PSK proof — refusing link")
             }
             writeFrameTo(out, mapOf("t" to "auth", "proof" to hmac(DOMAIN_CLI, theirNonce)))
-            val ready = readFrame(input)
+            val ready = readFrame(input, MAX_FRAME_V1)
             if (ready["t"] != "ready") throw Exception("auth rejected (${ready["t"]}/${ready["err"]})")
             sock.soTimeout = 0
 
@@ -440,6 +443,8 @@ class ControlChannelClient(
             sentArtKeys.clear()
         }
         lastGood = session.host
+        maxFrame = maxFrameFor(session.proto)
+        _bridgeUp.value = false
         _state.value = LinkState.Connected(session.proto, session.caps)
         Log.i(TAG, "linked to ${session.host}:$port proto=${session.proto} caps=${session.caps}")
 
@@ -471,9 +476,52 @@ class ControlChannelClient(
                     writeFrameLocked(mapOf("t" to "pong", "n" to (msg["n"] as? Long ?: 0L)))
                 }
                 "bye" -> throw EOFException("desktop sent bye")
-                else -> Log.d(TAG, "ignoring message t=${msg["t"]}")
+                "bridge" -> {
+                    val up = msg["up"] as? Boolean ?: false
+                    Log.i(TAG, "desktop bridge ${if (up) "up" else "down"}")
+                    _bridgeUp.value = up
+                }
+                // Everything the user-session bridge sends: desk / frame / thumbr
+                // / actr / dictr / pcm / mirror / listen. Consumers collect
+                // [messages]; a slow one loses old frames, never the link.
+                else -> messages.tryEmit(msg)
             }
         }
+    }
+
+    // ---- proto 2: the session-class channel ----------------------------------
+
+    /** Frames from the desktop's lattice-link bridge, newest wins on overflow. */
+    val messages = MutableSharedFlow<Map<String, Any?>>(
+        extraBufferCapacity = 128,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    private val _bridgeUp = MutableStateFlow(false)
+    /** True while the desktop reports its user-session bridge attached. */
+    val bridgeUp: StateFlow<Boolean> = _bridgeUp.asStateFlow()
+
+    /** Whether session-class messages can be sent at all (proto 2 + bridge). */
+    val sessionReady: Boolean
+        get() = (_state.value as? LinkState.Connected)?.proto?.let { it >= 2 } == true && _bridgeUp.value
+
+    /**
+     * Send one session-class message. Returns false when the link is down or
+     * proto 1 (the desktop would ignore it anyway). Serialized with every other
+     * writer on the socket.
+     */
+    suspend fun send(msg: Map<String, Any?>): Boolean {
+        val st = _state.value as? LinkState.Connected ?: return false
+        if (st.proto < 2) return false
+        return writeMutex.withLock { writeFrameLocked(msg) }
+    }
+
+    /**
+     * Fire-and-forget variant for input events: they arrive from the UI thread
+     * many times a second and must never block it.
+     */
+    fun post(msg: Map<String, Any?>) {
+        scope.launch(Dispatchers.IO) { send(msg) }
     }
 
     // ---- plumbing ---------------------------------------------------------
@@ -508,17 +556,21 @@ class ControlChannelClient(
         }
     }
 
-    private fun writeFrameTo(out: DataOutputStream, msg: Map<String, Any?>) {
+    /** Frame cap of the CURRENT link (4 KiB until a proto-2 session is up). */
+    @Volatile
+    private var maxFrame = MAX_FRAME_V1
+
+    private fun writeFrameTo(out: DataOutputStream, msg: Map<String, Any?>, max: Int = maxFrame) {
         val body = CborLite.encode(msg)
-        if (body.size > MAX_FRAME) throw Exception("frame too large (${body.size})")
+        if (body.size > max) throw Exception("frame too large (${body.size} > $max)")
         out.writeInt(body.size)
         out.write(body)
         out.flush()
     }
 
-    private fun readFrame(input: DataInputStream): Map<String, Any?> {
+    private fun readFrame(input: DataInputStream, max: Int = maxFrame): Map<String, Any?> {
         val len = input.readInt()
-        if (len <= 0 || len > MAX_FRAME) throw Exception("bad frame length $len")
+        if (len <= 0 || len > max) throw Exception("bad frame length $len (cap $max)")
         val body = ByteArray(len)
         input.readFully(body)
         return CborLite.decodeMap(body)
@@ -530,8 +582,19 @@ class ControlChannelClient(
     companion object {
         private const val TAG = "ControlChannel"
         const val PORT_DEFAULT = 4906
-        const val PROTO_VERSION = 1L
-        private const val MAX_FRAME = 4096
+        /**
+         * Proto 2 (Lattice, 2026-09-13): same handshake and messages, plus a
+         * 256 KiB frame cap once authenticated and the session-class message
+         * types the desktop's lattice-link bridge serves (desk/act/thumb/input/
+         * mirror/dict/listen). Effective proto is min(both), so an older desktop
+         * keeps the 4 KiB cap and never sees them.
+         */
+        const val PROTO_VERSION = 2L
+        /** Cap before authentication and for the whole of a proto-1 link. */
+        private const val MAX_FRAME_V1 = 4096
+        /** Cap once a proto-2 link is up (mirror frames, thumbnails, PCM). */
+        private const val MAX_FRAME_V2 = 256 * 1024
+        private fun maxFrameFor(proto: Long) = if (proto >= 2) MAX_FRAME_V2 else MAX_FRAME_V1
         private const val NONCE_LEN = 16
         private const val CONNECT_TIMEOUT_MS = 8_000
         private const val HANDSHAKE_TIMEOUT_MS = 10_000
@@ -549,7 +612,18 @@ class ControlChannelClient(
         private val DOMAIN_CLI = "slink-cli".toByteArray(Charsets.US_ASCII)
         // Capabilities this app version speaks. The custom link is flavor-
         // INDEPENDENT — both foss and play ship exactly these.
-        private val CLIENT_CAPS = listOf("media", "np", "cmd", "spectrum-udp", "pcm-party", "art")
+        private val CLIENT_CAPS = listOf(
+            "media", "np", "cmd", "spectrum-udp", "pcm-party", "art",
+            "audio", "desk", "act", "thumb", "input", "mirror", "dict", "listen",
+        )
+
+        /**
+         * The live client, for the UI and the dictation / listen services. Set
+         * by MediaSessionBeaconService for the life of its link loop.
+         */
+        private val _current = MutableStateFlow<ControlChannelClient?>(null)
+        val current: StateFlow<ControlChannelClient?> = _current.asStateFlow()
+        fun publish(client: ControlChannelClient?) { _current.value = client }
 
         /**
          * Art chunk payload. Must leave room for the frame's other keys inside

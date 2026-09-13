@@ -112,7 +112,14 @@ class MediaSessionBeaconService : LifecycleService() {
                 hosts = linkHosts,
                 port = ControlChannelClient.PORT_DEFAULT,
                 normalizedPsk = readPskPref(),
-            ).also { it.start() }
+            ).also {
+                it.start()
+                // The UI and the dictation / listen services talk to the
+                // desktop through this same client.
+                ControlChannelClient.publish(it)
+                Link.attach(it, lifecycleScope)
+                AudioRouteMonitor.attach(this, it, lifecycleScope)
+            }
         }
 
         // Reverse command channel (desktop -> phone): bind once, run for the
@@ -197,6 +204,8 @@ class MediaSessionBeaconService : LifecycleService() {
     override fun onDestroy() {
         beaconJob?.cancel()
         beaconJob = null
+        ControlChannelClient.publish(null)
+        Link.detach()
         link?.stop()
         link = null
         commandListener?.close()
@@ -240,12 +249,19 @@ class MediaSessionBeaconService : LifecycleService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val dictatePi = PendingIntent.getForegroundService(
+            this,
+            2,
+            Intent(this, DictationService::class.java).setAction(DictationService.ACTION_START),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
         val notif: Notification = NotificationCompat.Builder(this, AudioCaptureService.CHANNEL_ID)
             .setContentTitle("Lattice")
-            .setContentText("Cast playback detection active")
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentText("Linked to the desktop")
+            .setSmallIcon(R.drawable.ic_stat_lattice)
             .setContentIntent(contentPi)
             .setOngoing(true)
+            .addAction(0, "Dictate", dictatePi)
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

@@ -12,7 +12,9 @@ import java.io.ByteArrayOutputStream
  *   major 3    text strings   (String, UTF-8)
  *   major 4    arrays         (List<Any?>)
  *   major 5    maps           (Map<String, Any?> — text keys)
- *   major 7    false / true / null
+ *   major 7    false / true / null / float16 / float32 / float64 (decoded to Double;
+ *              ciborium on the desktop shrinks every float to the smallest lossless
+ *              width, so 1.0 arrives as a half float — proto 2 carries window rects)
  *
  * The desktop side (ciborium in snapcast-mixer's phone-link) also emits
  * definite-length values, so this decoder never sees indefinite lengths from
@@ -57,6 +59,12 @@ object CborLite {
             null -> out.write(0xF6)
             is Boolean -> out.write(if (value) 0xF5 else 0xF4)
             is Int -> writeValue(out, value.toLong())
+            is Float -> writeValue(out, value.toDouble())
+            is Double -> {
+                out.write(0xFB)
+                val bits = java.lang.Double.doubleToLongBits(value)
+                for (shift in 56 downTo 0 step 8) out.write((bits shr shift).toInt() and 0xFF)
+            }
             is Long ->
                 if (value >= 0) writeTypeAndLen(out, 0, value)
                 else writeTypeAndLen(out, 1, -1L - value)
@@ -110,7 +118,7 @@ object CborLite {
         }
     }
 
-    private const val MAX_NESTING = 8
+    private const val MAX_NESTING = 12
 
     private fun readLen(cur: Cursor, info: Int): Long = when {
         info < 24 -> info.toLong()
@@ -159,6 +167,17 @@ object CborLite {
                 20 -> false
                 21 -> true
                 22 -> null
+                25 -> halfToDouble((cur.byte() shl 8) or cur.byte())
+                26 -> {
+                    var v = 0
+                    repeat(4) { v = (v shl 8) or cur.byte() }
+                    java.lang.Float.intBitsToFloat(v).toDouble()
+                }
+                27 -> {
+                    var v = 0L
+                    repeat(8) { v = (v shl 8) or cur.byte().toLong() }
+                    java.lang.Double.longBitsToDouble(v)
+                }
                 else -> throw CborException("unsupported simple value $info")
             }
             else -> throw CborException("unsupported major type $major")
@@ -166,9 +185,24 @@ object CborLite {
     }
 
     private fun Long.toIntChecked(): Int {
-        // Frames are capped at 4 KiB by LinkProtocol, so any length beyond that
-        // is corrupt input, not a big message.
-        if (this < 0 || this > 65536) throw CborException("implausible length $this")
+        // Frames are capped at 256 KiB on a proto-2 link (mirror frames and
+        // window thumbnails ride inside one frame), so anything beyond that is
+        // corrupt input, not a big message.
+        if (this < 0 || this > MAX_LEN) throw CborException("implausible length $this")
         return this.toInt()
+    }
+
+    private const val MAX_LEN = 256L * 1024
+
+    /** IEEE 754 binary16 → Double (RFC 8949 appendix D). */
+    private fun halfToDouble(half: Int): Double {
+        val exp = (half shr 10) and 0x1F
+        val mant = half and 0x3FF
+        val value = when (exp) {
+            0 -> Math.scalb(mant.toDouble(), -24)
+            31 -> if (mant == 0) Double.POSITIVE_INFINITY else Double.NaN
+            else -> Math.scalb((mant + 1024).toDouble(), exp - 25)
+        }
+        return if (half and 0x8000 != 0) -value else value
     }
 }

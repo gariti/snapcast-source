@@ -1,0 +1,619 @@
+package com.lattice.app
+
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Monitor
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+import kotlin.math.abs
+
+/** Everything the four tabs share. Owned by MainActivity, seeded from prefs. */
+class AppState(
+    host: String, slotIndex: Int, partyMode: Boolean, psk: String,
+    val onHostChange: (String) -> Unit,
+    val onSlotChange: (Int) -> Unit,
+    val onPartyModeChange: (Boolean) -> Unit,
+    val onPskChange: (String) -> Unit,
+    val onStartCapture: (String, Int, String) -> Unit,
+    val onStopCapture: () -> Unit,
+) {
+    var host by mutableStateOf(host)
+    var slotIndex by mutableStateOf(slotIndex)
+    var partyMode by mutableStateOf(partyMode)
+    var psk by mutableStateOf(psk)
+}
+
+enum class Tab(val label: String) { Desktop("Desktop"), Windows("Windows"), Audio("Audio"), Settings("Settings") }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LatticeApp(app: AppState) {
+    var tab by rememberSaveable { mutableStateOf(Tab.Desktop) }
+    val client by Link.client.collectAsState()
+    val linkState by (client?.state ?: kotlinx.coroutines.flow.MutableStateFlow(ControlChannelClient.LinkState.Disconnected)).collectAsState()
+    val bridgeUp by (client?.bridgeUp ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
+    val snackbar = remember { SnackbarHostState() }
+    val dict by Link.dict.collectAsState()
+
+    // Dictation outcomes surface as a snackbar on whichever tab is open.
+    LaunchedEffect(dict) {
+        when (val d = dict) {
+            is Link.DictState.Done -> { snackbar.showSnackbar("Typed: " + d.text.take(80)); Link.clearDict() }
+            is Link.DictState.Failed -> { snackbar.showSnackbar("Dictation: " + d.reason); Link.clearDict() }
+            else -> {}
+        }
+    }
+
+    val status = when (val s = linkState) {
+        is ControlChannelClient.LinkState.Connected ->
+            if (s.proto < 2) "linked · old desktop" else if (bridgeUp) "linked" else "linked · bridge offline"
+        ControlChannelClient.LinkState.Connecting -> "connecting…"
+        else -> if (client == null) "not running" else "offline"
+    }
+    val statusColor = when {
+        linkState is ControlChannelClient.LinkState.Connected && bridgeUp -> MaterialTheme.colorScheme.primary
+        linkState is ControlChannelClient.LinkState.Connected -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.outline
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Lattice", fontFamily = FontFamily.Monospace)
+                        Box(Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(statusColor))
+                        Text(status, style = MaterialTheme.typography.labelMedium, color = statusColor)
+                    }
+                },
+            )
+        },
+        bottomBar = {
+            NavigationBar {
+                Tab.entries.forEach { t ->
+                    NavigationBarItem(
+                        selected = tab == t,
+                        onClick = { tab = t },
+                        icon = {
+                            Icon(
+                                when (t) {
+                                    Tab.Desktop -> Icons.Filled.Monitor
+                                    Tab.Windows -> Icons.Filled.Apps
+                                    Tab.Audio -> Icons.Filled.Headphones
+                                    Tab.Settings -> Icons.Filled.Settings
+                                }, contentDescription = t.label,
+                            )
+                        },
+                        label = { Text(t.label) },
+                    )
+                }
+            }
+        },
+        floatingActionButton = { DictateFab() },
+        snackbarHost = { SnackbarHost(snackbar) { Snackbar(it) } },
+    ) { pad ->
+        Box(Modifier.padding(pad).fillMaxSize()) {
+            when (tab) {
+                Tab.Desktop -> DesktopScreen(ready = bridgeUp && (linkState as? ControlChannelClient.LinkState.Connected)?.proto?.let { it >= 2 } == true)
+                Tab.Windows -> WindowsScreen()
+                Tab.Audio -> AudioScreen(app)
+                Tab.Settings -> SettingsScreen(app)
+            }
+        }
+    }
+}
+
+// ---- dictation -------------------------------------------------------------
+
+@Composable
+fun DictateFab() {
+    val ctx = LocalContext.current
+    val active by DictationService.active.collectAsState()
+    val dict by Link.dict.collectAsState()
+    val level by DictationService.level.collectAsState()
+    val micGranted = remember { mutableStateOf(ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        micGranted.value = ok
+        if (ok) DictationService.toggle(ctx)
+    }
+    val transcribing = dict is Link.DictState.Transcribing
+    ExtendedFloatingActionButton(
+        onClick = {
+            if (!micGranted.value) ask.launch(Manifest.permission.RECORD_AUDIO)
+            else DictationService.toggle(ctx)
+        },
+        icon = { Icon(if (active) Icons.Filled.Stop else Icons.Filled.Mic, contentDescription = null) },
+        text = {
+            Text(
+                when {
+                    active -> "Done" + if (level > 0.02f) " ●" else ""
+                    transcribing -> "Transcribing…"
+                    else -> "Dictate"
+                }
+            )
+        },
+        expanded = true,
+        containerColor = if (active) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primaryContainer,
+    )
+}
+
+// ---- Desktop tab -------------------------------------------------------------
+
+@Composable
+fun DesktopScreen(ready: Boolean) {
+    val desk by Link.desk.collectAsState()
+    val frames by Link.frames.collectAsState()
+    val mirrorError by Link.mirrorError.collectAsState()
+    var output by rememberSaveable { mutableStateOf<String?>(null) }
+    val outputs = desk.outputs
+    val current = outputs.firstOrNull { it.name == output } ?: outputs.firstOrNull()
+    var mirrorOn by rememberSaveable { mutableStateOf(true) }
+
+    // Mirror only while this tab is on screen and the bridge is up.
+    LaunchedEffect(current?.name, ready, mirrorOn) {
+        if (ready && mirrorOn && current != null) Link.mirror(current.name, fps = 4, width = 768)
+        else Link.mirror(null)
+    }
+    DisposableEffect(Unit) { onDispose { Link.mirror(null) } }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (!ready) {
+            NoticeCard(
+                "Desktop not reachable",
+                "The mirror, pointer and keyboard need the desktop's bridge. Check Settings for the link state.",
+            )
+        }
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            outputs.forEach { o ->
+                FilterChip(
+                    selected = current?.name == o.name,
+                    onClick = { output = o.name },
+                    label = { Text("${o.name} · ${o.w}×${o.h}") },
+                )
+            }
+            FilterChip(selected = mirrorOn, onClick = { mirrorOn = !mirrorOn }, label = { Text(if (mirrorOn) "Mirror on" else "Mirror off") })
+        }
+
+        if (current != null) {
+            val ws = desk.workspaces.firstOrNull { it.output == current.name && it.active }
+            val wins = desk.windows.filter { it.output == current.name && it.visible && it.rect != null && (ws == null || it.workspace == ws.id) }
+            Text(
+                (ws?.let { "workspace ${it.name.ifBlank { it.idx.toString() }}" } ?: "") + " · ${desk.windows.count { it.output == current.name }} windows",
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline,
+            )
+            MirrorView(output = current, frame = frames[current.name], windows = wins, enabled = ready)
+            mirrorError?.let { Text("Mirror: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
+        }
+
+        Trackpad(enabled = ready)
+        KeyRow(enabled = ready)
+        TextComposer(enabled = ready)
+        Spacer(Modifier.height(72.dp))
+    }
+}
+
+@Composable
+fun MirrorView(output: Link.Output, frame: android.graphics.Bitmap?, windows: List<Link.Win>, enabled: Boolean) {
+    val ratio = if (output.h > 0) output.w.toFloat() / output.h.toFloat() else 16f / 9f
+    val focusColor = MaterialTheme.colorScheme.primary
+    val lineColor = MaterialTheme.colorScheme.outline
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(ratio)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+            .pointerInput(output.name, enabled) {
+                if (!enabled) return@pointerInput
+                detectTapGestures(
+                    onTap = { p ->
+                        Link.pointerAbs(output.name, p.x / size.width, p.y / size.height)
+                        Link.click("left")
+                    },
+                    onDoubleTap = { p ->
+                        Link.pointerAbs(output.name, p.x / size.width, p.y / size.height)
+                        Link.click("left"); Link.click("left")
+                    },
+                    onLongPress = { p ->
+                        Link.pointerAbs(output.name, p.x / size.width, p.y / size.height)
+                        Link.click("right")
+                    },
+                )
+            }
+            .pointerInput(output.name, enabled) {
+                if (!enabled) return@pointerInput
+                // Press-and-drag = left button held while the pointer follows.
+                detectDragGestures(
+                    onDragStart = { p ->
+                        Link.pointerAbs(output.name, p.x / size.width, p.y / size.height)
+                        Link.button("left", true)
+                    },
+                    onDrag = { change, _ ->
+                        Link.pointerAbs(output.name, change.position.x / size.width, change.position.y / size.height)
+                    },
+                    onDragEnd = { Link.button("left", false) },
+                    onDragCancel = { Link.button("left", false) },
+                )
+            },
+    ) {
+        if (frame != null) {
+            Image(frame.asImageBitmap(), contentDescription = "desktop mirror", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+        } else {
+            Text(
+                if (enabled) "waiting for the first frame…" else "mirror off",
+                Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.labelMedium,
+            )
+        }
+        // Window outlines, so you can see what a tap lands on.
+        Canvas(Modifier.fillMaxSize()) {
+            val sx = size.width / output.w.toFloat()
+            val sy = size.height / output.h.toFloat()
+            windows.forEach { w ->
+                val r = w.rect ?: return@forEach
+                drawRect(
+                    color = if (w.focused) focusColor else lineColor,
+                    topLeft = Offset(r[0] * sx, r[1] * sy),
+                    size = Size(r[2] * sx, r[3] * sy),
+                    style = Stroke(width = if (w.focused) 3f else 1.5f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun Trackpad(enabled: Boolean) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Trackpad", style = MaterialTheme.typography.labelMedium)
+            Text("one finger moves · tap clicks · two fingers scroll · hold then drag to drag", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(200.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .pointerInput(enabled) {
+                        if (!enabled) return@pointerInput
+                        val gain = 1.8f
+                        awaitEachGesture {
+                            val down = awaitPointerEvent()
+                            val t0 = System.currentTimeMillis()
+                            var moved = 0f
+                            var twoFinger = false
+                            var dragging = false
+                            var last = down.changes.map { it.position }
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                val pressed = ev.changes.filter { it.pressed }
+                                if (pressed.isEmpty()) break
+                                val now = pressed.map { it.position }
+                                if (pressed.size >= 2) {
+                                    twoFinger = true
+                                    if (last.size >= 2) {
+                                        val dy = ((now[0].y - last[0].y) + (now[1].y - last[1].y)) / 2f
+                                        val dx = ((now[0].x - last[0].x) + (now[1].x - last[1].x)) / 2f
+                                        if (abs(dx) + abs(dy) > 0.5f) Link.scroll(dx / 4f, dy / 4f)
+                                    }
+                                } else if (!twoFinger && last.isNotEmpty()) {
+                                    val dx = (now[0].x - last[0].x) / density * gain
+                                    val dy = (now[0].y - last[0].y) / density * gain
+                                    moved += abs(dx) + abs(dy)
+                                    // A still press past 350 ms becomes a drag (button held).
+                                    if (!dragging && moved < 6f && System.currentTimeMillis() - t0 > 350) {
+                                        dragging = true
+                                        Link.button("left", true)
+                                    }
+                                    if (abs(dx) + abs(dy) > 0f) Link.pointerRel(dx, dy)
+                                }
+                                ev.changes.forEach { it.consume() }
+                                last = now
+                            }
+                            if (dragging) Link.button("left", false)
+                            else if (!twoFinger && moved < 6f && System.currentTimeMillis() - t0 < 300) Link.click("left")
+                        }
+                    },
+            ) {
+                Text("·", Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.outline)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { Link.click("left") }, enabled = enabled, modifier = Modifier.weight(1f)) { Text("Left") }
+                OutlinedButton(onClick = { Link.click("middle") }, enabled = enabled, modifier = Modifier.weight(1f)) { Text("Middle") }
+                OutlinedButton(onClick = { Link.click("right") }, enabled = enabled, modifier = Modifier.weight(1f)) { Text("Right") }
+            }
+        }
+    }
+}
+
+@Composable
+fun KeyRow(enabled: Boolean) {
+    var ctrl by remember { mutableStateOf(false) }
+    var alt by remember { mutableStateOf(false) }
+    var shift by remember { mutableStateOf(false) }
+    var sup by remember { mutableStateOf(false) }
+    fun send(key: String) {
+        val mods = buildList {
+            if (ctrl) add("ctrl"); if (alt) add("alt"); if (shift) add("shift"); if (sup) add("super")
+        }
+        Link.key((mods + key).joinToString("+"))
+        ctrl = false; alt = false; shift = false; sup = false
+    }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Keys", style = MaterialTheme.typography.labelMedium)
+            Text("Modifiers arm the next key. Chords reach the focused app, not the compositor — use Windows for those.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(selected = ctrl, onClick = { ctrl = !ctrl }, label = { Text("ctrl") }, enabled = enabled)
+                FilterChip(selected = alt, onClick = { alt = !alt }, label = { Text("alt") }, enabled = enabled)
+                FilterChip(selected = shift, onClick = { shift = !shift }, label = { Text("shift") }, enabled = enabled)
+                FilterChip(selected = sup, onClick = { sup = !sup }, label = { Text("super") }, enabled = enabled)
+            }
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Escape" to "esc", "Tab" to "tab", "Return" to "⏎", "BackSpace" to "⌫", "Delete" to "del", "space" to "␣").forEach { (k, l) ->
+                    AssistChip(onClick = { send(k) }, label = { Text(l) }, enabled = enabled)
+                }
+            }
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Left" to "←", "Down" to "↓", "Up" to "↑", "Right" to "→", "Home" to "home", "End" to "end", "Page_Up" to "pgup", "Page_Down" to "pgdn").forEach { (k, l) ->
+                    AssistChip(onClick = { send(k) }, label = { Text(l) }, enabled = enabled)
+                }
+            }
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                (1..12).forEach { n -> AssistChip(onClick = { send("F$n") }, label = { Text("F$n") }, enabled = enabled) }
+            }
+        }
+    }
+}
+
+@Composable
+fun TextComposer(enabled: Boolean) {
+    var text by remember { mutableStateOf("") }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Type into the focused window", style = MaterialTheme.typography.labelMedium)
+            OutlinedTextField(
+                value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth(),
+                enabled = enabled, minLines = 2, placeholder = { Text("text lands as keystrokes; ⏎ sends Return") },
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { Link.typeText(text); text = "" }, enabled = enabled && text.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Type") }
+                OutlinedButton(onClick = { Link.typeText(text); Link.key("Return"); text = "" }, enabled = enabled && text.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Type + ⏎") }
+            }
+        }
+    }
+}
+
+// ---- Windows tab --------------------------------------------------------------
+
+@Composable
+fun WindowsScreen() {
+    val desk by Link.desk.collectAsState()
+    val thumbs by Link.thumbs.collectAsState()
+    var selectedWs by rememberSaveable { mutableStateOf<Long?>(null) }
+    var selectedWin by rememberSaveable { mutableStateOf<Long?>(null) }
+    val scope = rememberCoroutineScope()
+    val client by Link.client.collectAsState()
+    val ready = client?.sessionReady == true
+
+    val ws = desk.workspaces.firstOrNull { it.id == selectedWs } ?: desk.workspaces.firstOrNull { it.focused } ?: desk.workspaces.firstOrNull { it.active }
+    val wins = ws?.let { desk.windowsOn(it.id) } ?: desk.windows
+    val sel = desk.windows.firstOrNull { it.id == selectedWin }
+
+    // Thumbnails for what is on screen, refreshed when the set changes.
+    LaunchedEffect(wins.map { it.id to it.visible }, ready) {
+        if (ready) wins.filter { it.visible && it.rect != null }.forEach { Link.requestThumb(it.id, 480) }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        if (!ready) NoticeCard("Desktop not reachable", "Window control needs the desktop's bridge.", Modifier.padding(16.dp))
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            desk.workspaces.forEach { w ->
+                FilterChip(
+                    selected = ws?.id == w.id,
+                    onClick = { selectedWs = w.id },
+                    label = { Text((w.name.ifBlank { "ws ${w.idx}" }) + " · " + w.output + if (w.active) " ●" else "") },
+                )
+            }
+        }
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(bottom = 12.dp),
+        ) {
+            items(wins, key = { it.id }) { w ->
+                val selected = sel?.id == w.id
+                Card(
+                    onClick = { selectedWin = w.id },
+                    colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant),
+                    border = if (w.focused) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+                ) {
+                    Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(Modifier.fillMaxWidth().aspectRatio(16f / 10f).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surface)) {
+                            val bmp = thumbs[w.id]
+                            if (bmp != null) Image(bmp.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            else Text(
+                                if (!w.visible) "hidden" else if (w.rect == null) "off screen" else "…",
+                                Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        Text(w.app.ifBlank { "?" }, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(w.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+        if (sel != null) {
+            WindowActions(sel, desk, enabled = ready, onDone = { scope.launch { Link.requestDesk() } })
+        }
+    }
+}
+
+@Composable
+fun WindowActions(w: Link.Win, desk: Link.Desk, enabled: Boolean, onDone: () -> Unit) {
+    fun focusThen(vararg actions: JSONObject) {
+        Link.act("FocusWindow", "id" to w.id)
+        actions.forEach { Link.act(it) }
+        onDone()
+    }
+    fun unit(name: String) = JSONObject().put(name, JSONObject())
+    Card(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("${w.app} — ${w.title}", style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                AssistChip(onClick = { Link.act("FocusWindow", "id" to w.id); onDone() }, label = { Text("focus") }, enabled = enabled)
+                AssistChip(onClick = { Link.act("CloseWindow", "id" to w.id); onDone() }, label = { Text("close") }, enabled = enabled)
+                AssistChip(onClick = { Link.act("FullscreenWindow", "id" to w.id); onDone() }, label = { Text("fullscreen") }, enabled = enabled)
+                AssistChip(onClick = { focusThen(unit("MaximizeColumn")) }, label = { Text("maximize") }, enabled = enabled)
+                AssistChip(onClick = { Link.act("ToggleWindowFloating", "id" to w.id); onDone() }, label = { Text(if (w.floating) "tile" else "float") }, enabled = enabled)
+                AssistChip(onClick = { Link.act(if (w.visible) "HideWindow" else "ShowWindow", "id" to w.id); onDone() }, label = { Text(if (w.visible) "hide" else "show") }, enabled = enabled)
+            }
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                AssistChip(onClick = { focusThen(unit("MoveColumnLeft")) }, label = { Text("← column") }, enabled = enabled)
+                AssistChip(onClick = { focusThen(unit("MoveColumnRight")) }, label = { Text("column →") }, enabled = enabled)
+                AssistChip(onClick = { focusThen(unit("MoveWindowToWorkspaceUp")) }, label = { Text("ws ▲") }, enabled = enabled)
+                AssistChip(onClick = { focusThen(unit("MoveWindowToWorkspaceDown")) }, label = { Text("ws ▼") }, enabled = enabled)
+                AssistChip(onClick = { focusThen(unit("SwitchPresetColumnWidth")) }, label = { Text("width ⇄") }, enabled = enabled)
+                desk.outputs.filter { it.name != w.output }.forEach { o ->
+                    AssistChip(onClick = { Link.act("MoveWindowToMonitor", "id" to w.id, "output" to o.name); onDone() }, label = { Text("→ ${o.name}") }, enabled = enabled)
+                }
+            }
+        }
+    }
+}
+
+// ---- shared bits ----------------------------------------------------------------
+
+@Composable
+fun NoticeCard(title: String, body: String, modifier: Modifier = Modifier) {
+    Card(modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(body, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+fun SectionCard(title: String, content: @Composable () -> Unit) {
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            content()
+        }
+    }
+}
+
+@Composable
+fun MeterBar(level: Float, modifier: Modifier = Modifier) {
+    LinearProgressIndicator(progress = { level.coerceIn(0f, 1f) }, modifier = modifier.fillMaxWidth().height(6.dp))
+}
+
+@Composable
+fun TextRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
+        Text(value, style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(220.dp))
+    }
+}
+
+@Composable
+fun SmallTextButton(label: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick) { Text(label) }
+}
+
+@Composable
+fun DimText(text: String) {
+    Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+}
+
+@Suppress("unused")
+private val keepColor = Color.Unspecified
