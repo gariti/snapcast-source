@@ -229,9 +229,26 @@ fun DesktopScreen(ready: Boolean) {
     val current = outputs.firstOrNull { it.name == output } ?: outputs.firstOrNull()
     var mirrorOn by rememberSaveable { mutableStateOf(true) }
 
-    // Mirror only while this tab is on screen and the bridge is up.
-    LaunchedEffect(current?.name, ready, mirrorOn) {
-        if (ready && mirrorOn && current != null) Link.mirror(current.name, fps = 4, width = 768)
+    // The mirror follows the activity: a locked phone or a backgrounded app
+    // must not keep wf-recorder and ~1 Mbit/s of frames running on the desktop.
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
+    var foreground by remember { mutableStateOf(lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) }
+    DisposableEffect(lifecycle) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> foreground = true
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> foreground = false
+                else -> {}
+            }
+        }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
+    }
+
+    // Mirror only while this tab is on screen, the app is in front, and the
+    // bridge is up.
+    LaunchedEffect(current?.name, ready, mirrorOn, foreground) {
+        if (ready && mirrorOn && foreground && current != null) Link.mirror(current.name, fps = 4, width = 768)
         else Link.mirror(null)
     }
     DisposableEffect(Unit) { onDispose { Link.mirror(null) } }

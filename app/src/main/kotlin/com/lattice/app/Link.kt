@@ -205,6 +205,7 @@ object Link {
     }
 
     fun mirror(output: String?, fps: Int = 4, width: Int = 768) {
+        Log.i(TAG, "mirror(${output ?: "off"}) ready=$ready from ${Throwable().stackTrace.getOrNull(1)}")
         mirrorOutput = output
         if (output == null) {
             _client.value?.post(mapOf("t" to "mirror", "on" to false))

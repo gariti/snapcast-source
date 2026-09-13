@@ -34,7 +34,9 @@ class NowPlayingUdpSink(
     private val port: Int,
 ) {
     private val socket: DatagramSocket = DatagramSocket()
-    private val addr: InetAddress = InetAddress.getByName(host)
+    // Lazy for the same reason as MediaSessionUdpSink: never resolve on the
+    // main thread.
+    private val addr: InetAddress by lazy { InetAddress.getByName(host) }
     private var seq: Int = 0
 
     fun send(state: MediaSessionListener.State) {

@@ -22,9 +22,13 @@ class MediaSessionUdpSink(
     private val port: Int,
 ) {
     private val socket: DatagramSocket = DatagramSocket()
-    private val addr: InetAddress = InetAddress.getByName(host)
+    // Resolved on first send, which runs on an IO thread. Constructing the sink
+    // happens in onStartCommand on the MAIN thread, where a DNS lookup of the
+    // MagicDNS name throws NetworkOnMainThreadException (message: null) — it
+    // only ever worked when a previous IO-thread lookup had warmed the cache.
+    private val addr: InetAddress by lazy { InetAddress.getByName(host) }
     private val buf = ByteArray(FRAME_SIZE)
-    private val packet = DatagramPacket(buf, FRAME_SIZE, addr, port)
+    private val packet by lazy { DatagramPacket(buf, FRAME_SIZE, addr, port) }
     private var seq: Int = 0
 
     init {
