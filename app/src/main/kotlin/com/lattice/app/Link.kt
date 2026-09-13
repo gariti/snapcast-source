@@ -58,9 +58,12 @@ object Link {
     private val _desk = MutableStateFlow(Desk())
     val desk: StateFlow<Desk> = _desk.asStateFlow()
 
-    /** Newest mirror frame per output, already decoded. */
-    private val _frames = MutableStateFlow<Map<String, Bitmap>>(emptyMap())
-    val frames: StateFlow<Map<String, Bitmap>> = _frames.asStateFlow()
+    /** One decoded mirror frame plus what it shows. */
+    class Frame(val bitmap: Bitmap, val output: String, val win: Long?, val rect: IntArray?)
+
+    /** Newest mirror frame, already decoded. */
+    private val _frame = MutableStateFlow<Frame?>(null)
+    val frame: StateFlow<Frame?> = _frame.asStateFlow()
 
     /** Window thumbnails by id (or an error string when one could not be taken). */
     private val _thumbs = MutableStateFlow<Map<Long, Bitmap>>(emptyMap())
@@ -84,7 +87,7 @@ object Link {
     val actionReplies = MutableSharedFlow<Pair<Long, String?>>(extraBufferCapacity = 32, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
 
     private var collector: Job? = null
-    private var mirrorOutput: String? = null
+    @Volatile private var mirrorOn = false
     private var actionSeq = 0L
 
     fun attach(client: ControlChannelClient, scope: CoroutineScope) {
@@ -99,7 +102,7 @@ object Link {
         collector?.cancel()
         collector = null
         _client.value = null
-        _frames.value = emptyMap()
+        _frame.value = null
         _listening.value = false
         _dict.value = DictState.Idle
     }
@@ -110,10 +113,13 @@ object Link {
             "frame" -> {
                 val out = msg["output"] as? String ?: return
                 val d = msg["d"] as? ByteArray ?: return
+                // A late frame from a stopped mirror must not resurrect a
+                // stale picture.
+                if (!mirrorOn) return
                 val bmp = BitmapFactory.decodeByteArray(d, 0, d.size) ?: return
-                // Only the output we asked for: a late frame from a stopped
-                // mirror must not resurrect a stale picture.
-                if (mirrorOutput == out) _frames.value = _frames.value + (out to bmp)
+                @Suppress("UNCHECKED_CAST")
+                val rect = (msg["rect"] as? List<Any?>)?.map { (it as? Long)?.toInt() ?: 0 }?.takeIf { it.size == 4 }?.toIntArray()
+                _frame.value = Frame(bmp, out, msg["win"] as? Long, rect)
             }
             "thumbr" -> {
                 val id = msg["id"] as? Long ?: return
@@ -148,7 +154,7 @@ object Link {
             }
             "mirror" -> {
                 _mirrorError.value = msg["err"] as? String
-                if (msg["on"] == false) mirrorOutput = null
+                if (msg["on"] == false) mirrorOn = false
             }
         }
     }
@@ -204,16 +210,32 @@ object Link {
         _client.value?.post(mapOf("t" to "thumb", "id" to id, "w" to width))
     }
 
-    fun mirror(output: String?, fps: Int = 4, width: Int = 768) {
-        Log.i(TAG, "mirror(${output ?: "off"}) ready=$ready from ${Throwable().stackTrace.getOrNull(1)}")
-        mirrorOutput = output
-        if (output == null) {
+    /**
+     * Start or stop the mirror. `focused` follows the focused window wherever
+     * it is (the bridge retargets on focus change); otherwise the named
+     * output is shown whole. `output` is the fallback while the focused
+     * window has no rect.
+     */
+    fun mirror(on: Boolean, focused: Boolean = true, output: String = "", fps: Int = 4, width: Int = 768) {
+        Log.i(TAG, "mirror(on=$on focused=$focused output=$output)")
+        mirrorOn = on
+        if (!on) {
             _client.value?.post(mapOf("t" to "mirror", "on" to false))
-            _frames.value = emptyMap()
+            _frame.value = null
         } else {
             _mirrorError.value = null
-            _client.value?.post(mapOf("t" to "mirror", "on" to true, "output" to output, "fps" to fps, "width" to width))
+            _client.value?.post(
+                mapOf(
+                    "t" to "mirror", "on" to true, "target" to (if (focused) "focused" else "output"),
+                    "output" to output, "fps" to fps, "width" to width,
+                )
+            )
         }
+    }
+
+    /** (u, v) inside the mirrored picture → the pointer lands there. */
+    fun pointerIn(u: Float, v: Float) {
+        _client.value?.post(mapOf("t" to "ptr", "op" to "win", "u" to u.toDouble(), "v" to v.toDouble()))
     }
 
     fun pointerAbs(output: String, u: Float, v: Float) {

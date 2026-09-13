@@ -34,6 +34,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Monitor
 import androidx.compose.material.icons.filled.Settings
@@ -103,7 +104,7 @@ class AppState(
     var psk by mutableStateOf(psk)
 }
 
-enum class Tab(val label: String) { Desktop("Desktop"), Windows("Windows"), Audio("Audio"), Settings("Settings") }
+enum class Tab(val label: String) { Desktop("Desktop"), Input("Input"), Windows("Windows"), Audio("Audio"), Settings("Settings") }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -158,6 +159,7 @@ fun LatticeApp(app: AppState) {
                             Icon(
                                 when (t) {
                                     Tab.Desktop -> Icons.Filled.Monitor
+                                    Tab.Input -> Icons.Filled.Keyboard
                                     Tab.Windows -> Icons.Filled.Apps
                                     Tab.Audio -> Icons.Filled.Headphones
                                     Tab.Settings -> Icons.Filled.Settings
@@ -175,6 +177,7 @@ fun LatticeApp(app: AppState) {
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
                 Tab.Desktop -> DesktopScreen(ready = bridgeUp && (linkState as? ControlChannelClient.LinkState.Connected)?.proto?.let { it >= 2 } == true)
+                Tab.Input -> InputScreen(ready = bridgeUp && (linkState as? ControlChannelClient.LinkState.Connected)?.proto?.let { it >= 2 } == true)
                 Tab.Windows -> WindowsScreen()
                 Tab.Audio -> AudioScreen(app)
                 Tab.Settings -> SettingsScreen(app)
@@ -222,12 +225,14 @@ fun DictateFab() {
 @Composable
 fun DesktopScreen(ready: Boolean) {
     val desk by Link.desk.collectAsState()
-    val frames by Link.frames.collectAsState()
+    val frame by Link.frame.collectAsState()
     val mirrorError by Link.mirrorError.collectAsState()
+    var wholeOutput by rememberSaveable { mutableStateOf(false) }
     var output by rememberSaveable { mutableStateOf<String?>(null) }
-    val outputs = desk.outputs
-    val current = outputs.firstOrNull { it.name == output } ?: outputs.firstOrNull()
     var mirrorOn by rememberSaveable { mutableStateOf(true) }
+    val outputs = desk.outputs
+    val focused = desk.focused
+    val fallback = outputs.firstOrNull { it.name == output } ?: outputs.firstOrNull { it.name == focused?.output } ?: outputs.firstOrNull()
 
     // The mirror follows the activity: a locked phone or a backgrounded app
     // must not keep wf-recorder and ~1 Mbit/s of frames running on the desktop.
@@ -245,120 +250,110 @@ fun DesktopScreen(ready: Boolean) {
         onDispose { lifecycle.removeObserver(obs) }
     }
 
-    // Mirror only while this tab is on screen, the app is in front, and the
-    // bridge is up.
-    LaunchedEffect(current?.name, ready, mirrorOn, foreground) {
-        if (ready && mirrorOn && foreground && current != null) Link.mirror(current.name, fps = 4, width = 768)
-        else Link.mirror(null)
+    // Focused window by default (the bridge follows focus); whole output on
+    // request. Only while this tab is up, the app is in front, and the bridge
+    // is reachable.
+    LaunchedEffect(fallback?.name, wholeOutput, ready, mirrorOn, foreground) {
+        if (ready && mirrorOn && foreground && fallback != null) {
+            Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = 4, width = if (wholeOutput) 1024 else 768)
+        } else {
+            Link.mirror(on = false)
+        }
     }
-    DisposableEffect(Unit) { onDispose { Link.mirror(null) } }
+    DisposableEffect(Unit) { onDispose { Link.mirror(on = false) } }
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        if (!ready) {
-            NoticeCard(
-                "Desktop not reachable",
-                "The mirror, pointer and keyboard need the desktop's bridge. Check Settings for the link state.",
-            )
-        }
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxSize()) {
+        // One thin strip: what is shown, and the two toggles.
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FilterChip(selected = !wholeOutput, onClick = { wholeOutput = false }, label = { Text("focused window") })
             outputs.forEach { o ->
-                FilterChip(
-                    selected = current?.name == o.name,
-                    onClick = { output = o.name },
-                    label = { Text("${o.name} · ${o.w}×${o.h}") },
-                )
+                FilterChip(selected = wholeOutput && fallback?.name == o.name, onClick = { wholeOutput = true; output = o.name }, label = { Text(o.name) })
             }
-            FilterChip(selected = mirrorOn, onClick = { mirrorOn = !mirrorOn }, label = { Text(if (mirrorOn) "Mirror on" else "Mirror off") })
+            FilterChip(selected = mirrorOn, onClick = { mirrorOn = !mirrorOn }, label = { Text(if (mirrorOn) "live" else "paused") })
         }
-
-        if (current != null) {
-            val ws = desk.workspaces.firstOrNull { it.output == current.name && it.active }
-            val wins = desk.windows.filter { it.output == current.name && it.visible && it.rect != null && (ws == null || it.workspace == ws.id) }
-            Text(
-                (ws?.let { "workspace ${it.name.ifBlank { it.idx.toString() }}" } ?: "") + " · ${desk.windows.count { it.output == current.name }} windows",
-                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline,
-            )
-            MirrorView(output = current, frame = frames[current.name], windows = wins, enabled = ready)
-            mirrorError?.let { Text("Mirror: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
+        val title = if (!wholeOutput) focused?.let { "${it.app} — ${it.title}" } ?: "no focused window" else fallback?.let { "${it.name} · ${it.w}×${it.h}" } ?: ""
+        Text(
+            title, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        if (!ready) NoticeCard("Desktop not reachable", "The mirror needs the desktop's bridge. Check Settings for the link state.", Modifier.padding(16.dp))
+        mirrorError?.let { Text("Mirror: $it", Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
+        // The picture takes everything that is left, letterboxed to its own
+        // aspect ratio; taps land inside the window it shows.
+        Box(Modifier.weight(1f).fillMaxWidth().padding(4.dp), contentAlignment = Alignment.Center) {
+            MirrorView(frame = frame, enabled = ready)
         }
-
-        Trackpad(enabled = ready)
-        KeyRow(enabled = ready)
-        TextComposer(enabled = ready)
-        Spacer(Modifier.height(72.dp))
     }
 }
 
 @Composable
-fun MirrorView(output: Link.Output, frame: android.graphics.Bitmap?, windows: List<Link.Win>, enabled: Boolean) {
-    val ratio = if (output.h > 0) output.w.toFloat() / output.h.toFloat() else 16f / 9f
-    val focusColor = MaterialTheme.colorScheme.primary
-    val lineColor = MaterialTheme.colorScheme.outline
+fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
+    val bmp = frame?.bitmap
+    val ratio = if (bmp != null && bmp.height > 0) bmp.width.toFloat() / bmp.height.toFloat() else 16f / 10f
     Box(
         Modifier
-            .fillMaxWidth()
             .aspectRatio(ratio)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(6.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-            .pointerInput(output.name, enabled) {
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))
+            .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 detectTapGestures(
                     onTap = { p ->
-                        Link.pointerAbs(output.name, p.x / size.width, p.y / size.height)
+                        Link.pointerIn(p.x / size.width, p.y / size.height)
                         Link.click("left")
                     },
                     onDoubleTap = { p ->
-                        Link.pointerAbs(output.name, p.x / size.width, p.y / size.height)
+                        Link.pointerIn(p.x / size.width, p.y / size.height)
                         Link.click("left"); Link.click("left")
                     },
                     onLongPress = { p ->
-                        Link.pointerAbs(output.name, p.x / size.width, p.y / size.height)
+                        Link.pointerIn(p.x / size.width, p.y / size.height)
                         Link.click("right")
                     },
                 )
             }
-            .pointerInput(output.name, enabled) {
+            .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 // Press-and-drag = left button held while the pointer follows.
                 detectDragGestures(
                     onDragStart = { p ->
-                        Link.pointerAbs(output.name, p.x / size.width, p.y / size.height)
+                        Link.pointerIn(p.x / size.width, p.y / size.height)
                         Link.button("left", true)
                     },
                     onDrag = { change, _ ->
-                        Link.pointerAbs(output.name, change.position.x / size.width, change.position.y / size.height)
+                        Link.pointerIn(change.position.x / size.width, change.position.y / size.height)
                     },
                     onDragEnd = { Link.button("left", false) },
                     onDragCancel = { Link.button("left", false) },
                 )
             },
     ) {
-        if (frame != null) {
-            Image(frame.asImageBitmap(), contentDescription = "desktop mirror", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+        if (bmp != null) {
+            Image(bmp.asImageBitmap(), contentDescription = "desktop mirror", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
         } else {
             Text(
                 if (enabled) "waiting for the first frame…" else "mirror off",
                 Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.labelMedium,
             )
         }
-        // Window outlines, so you can see what a tap lands on.
-        Canvas(Modifier.fillMaxSize()) {
-            val sx = size.width / output.w.toFloat()
-            val sy = size.height / output.h.toFloat()
-            windows.forEach { w ->
-                val r = w.rect ?: return@forEach
-                drawRect(
-                    color = if (w.focused) focusColor else lineColor,
-                    topLeft = Offset(r[0] * sx, r[1] * sy),
-                    size = Size(r[2] * sx, r[3] * sy),
-                    style = Stroke(width = if (w.focused) 3f else 1.5f),
-                )
-            }
-        }
+    }
+}
+
+@Composable
+fun InputScreen(ready: Boolean) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (!ready) NoticeCard("Desktop not reachable", "Pointer and keyboard need the desktop's bridge.")
+        Trackpad(enabled = ready)
+        KeyRow(enabled = ready)
+        TextComposer(enabled = ready)
+        Spacer(Modifier.height(72.dp))
     }
 }
 
