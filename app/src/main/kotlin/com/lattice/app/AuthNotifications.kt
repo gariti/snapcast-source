@@ -23,6 +23,8 @@ import androidx.core.app.NotificationCompat
 object AuthNotifications {
     const val CHANNEL_ID = "desktop_auth"
     private const val ID_BASE = 4100
+    /** The app's accent (Theme.kt `Cyan`), as an ARGB int for the notification tint. */
+    private const val ACCENT = 0xFF7DD7DB.toInt()
 
     fun ensureChannel(context: Context) {
         val mgr = context.getSystemService(NotificationManager::class.java)
@@ -59,8 +61,23 @@ object AuthNotifications {
             append(c.action)
             if (c.caller.isNotBlank()) append("  ·  ").append(c.caller)
         }
+        // The status-bar glyph is tiny and grey on recent Android; the picture
+        // people actually see is the large icon, so the fingerprint goes there
+        // too, in the app's accent.
+        val glyph = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_stat_fingerprint)
+        val large = glyph?.let { d ->
+            val px = (64 * context.resources.displayMetrics.density).toInt()
+            val bmp = android.graphics.Bitmap.createBitmap(px, px, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bmp)
+            d.setBounds(0, 0, px, px)
+            d.setTint(ACCENT)
+            d.draw(canvas)
+            bmp
+        }
         val n = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_fingerprint)
+            .setColor(ACCENT)
+            .setLargeIcon(large)
             .setContentTitle(c.title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(
