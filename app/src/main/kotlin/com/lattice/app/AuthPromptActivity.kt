@@ -41,10 +41,12 @@ import kotlinx.coroutines.delay
  * is often asking exactly when the phone is on the nightstand), never in
  * recents, and closes itself when the challenge is cancelled or expires.
  *
- * Approve → BiometricPrompt with the key's Signature as CryptoObject → the
- * unlocked Signature signs the challenge payload → `authr`. The signature can
- * only exist if the prompt succeeded; there is no code path that signs
- * without it.
+ * The BiometricPrompt opens the moment the screen does — one tap on the
+ * notification is the whole gesture. Its CryptoObject is the key's Signature;
+ * the unlocked Signature signs the challenge payload → `authr`. The signature
+ * can only exist if the prompt succeeded; there is no code path that signs
+ * without it. Backing out of the prompt lands on the details with Approve /
+ * Deny for a second try.
  */
 class AuthPromptActivity : FragmentActivity() {
 
@@ -76,6 +78,17 @@ class AuthPromptActivity : FragmentActivity() {
         var error by remember { mutableStateOf<String?>(null) }
         var busy by remember { mutableStateOf(false) }
         var remaining by remember { mutableStateOf(c?.remaining ?: 0L) }
+        var autoStarted by remember { mutableStateOf(false) }
+
+        // The tap on the notification IS the approve gesture: go straight to
+        // the fingerprint. A cancelled prompt falls back to the buttons below.
+        LaunchedEffect(c?.id) {
+            if (c != null && !autoStarted) {
+                autoStarted = true
+                busy = true
+                approveWithBiometric(c, onError = { error = it; busy = false })
+            }
+        }
 
         // Cancelled / expired / answered elsewhere → gone.
         LaunchedEffect(c) {
@@ -97,7 +110,7 @@ class AuthPromptActivity : FragmentActivity() {
                 if (c.caller.isNotBlank()) Text("from ${c.caller}", style = MaterialTheme.typography.bodyMedium)
                 if (c.message.isNotBlank()) Text(c.message, style = MaterialTheme.typography.bodyMedium)
                 Text("as ${c.user} · expires in ${remaining}s", style = MaterialTheme.typography.labelMedium)
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                error?.takeIf { it.isNotBlank() }?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(onClick = { DesktopAuth.deny(this@AuthPromptActivity, id); finish() }, enabled = !busy) {
                         Text("Deny")
@@ -149,7 +162,12 @@ class AuthPromptActivity : FragmentActivity() {
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    onError(errString.toString())
+                    // Cancel / back / user pressed the negative button: not a
+                    // deny, just back to the details with the buttons.
+                    val userBackedOut = errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                        errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                        errorCode == BiometricPrompt.ERROR_CANCELED
+                    onError(if (userBackedOut) "" else errString.toString())
                 }
 
                 override fun onAuthenticationFailed() {

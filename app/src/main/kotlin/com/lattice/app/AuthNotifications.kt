@@ -10,10 +10,12 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 
 /**
- * One heads-up notification per open desktop challenge. Tapping it (or
- * Approve) opens AuthPromptActivity, which is where the fingerprint happens;
- * Deny answers straight from the shade. The notification times itself out at
- * the challenge's expiry and is cancelled on `authc`.
+ * One heads-up notification per open desktop challenge. One tap opens
+ * AuthPromptActivity, which raises the fingerprint prompt straight away;
+ * swiping the notification away is a deny (its delete intent). No buttons —
+ * the two gestures are the two answers. The notification times itself out at
+ * the challenge's expiry and is cancelled on `authc` (a programmatic cancel
+ * does not fire the delete intent, so a withdrawn challenge is not "denied").
  *
  * Its own channel, IMPORTANCE_HIGH: the beacon's channel is deliberately LOW
  * (a silent "linked" pill), and a request to unlock the desktop has to buzz.
@@ -58,7 +60,7 @@ object AuthNotifications {
             if (c.caller.isNotBlank()) append("  ·  ").append(c.caller)
         }
         val n = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_lattice)
+            .setSmallIcon(R.drawable.ic_stat_fingerprint)
             .setContentTitle(c.title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(
@@ -68,8 +70,7 @@ object AuthNotifications {
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(openPi)
-            .addAction(0, "Approve", openPi)
-            .addAction(0, "Deny", denyPi)
+            .setDeleteIntent(denyPi)
             .setAutoCancel(false)
             .setOngoing(false)
             .setTimeoutAfter(c.remaining * 1000L)
@@ -83,7 +84,7 @@ object AuthNotifications {
     }
 }
 
-/** "Deny" from the notification shade. */
+/** The notification was swiped away: that is a deny. */
 class AuthActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == ACTION_DENY) {
