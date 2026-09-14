@@ -97,6 +97,7 @@ class MainActivity : ComponentActivity() {
         val initialMirrorFps = prefs.getInt(Prefs.KEY_MIRROR_FPS, Prefs.DEFAULT_MIRROR_FPS).coerceIn(1, 15)
         val initialMirrorIdle = prefs.getInt(Prefs.KEY_MIRROR_IDLE_S, Prefs.DEFAULT_MIRROR_IDLE_S).coerceIn(0, 3600)
         val initialMirrorOnMetered = prefs.getBoolean(Prefs.KEY_MIRROR_ON_METERED, false)
+        val initialTermZoom = prefs.getFloat(Prefs.KEY_TERM_ZOOM, 1f).coerceIn(TERM_ZOOM_MIN, TERM_ZOOM_MAX)
 
         // Persist the default host on first launch so MediaSessionBeaconService
         // (which reads prefs directly, not the in-memory UI state) can find it.
@@ -107,6 +108,7 @@ class MainActivity : ComponentActivity() {
         val appState = AppState(
             host = initialHost, slotIndex = initialSlotIdx, partyMode = initialPartyMode, psk = initialPsk,
             mirrorFps = initialMirrorFps, mirrorIdleSeconds = initialMirrorIdle, mirrorOnMetered = initialMirrorOnMetered,
+            termZoom = initialTermZoom,
             onHostChange = { host -> prefs.edit().putString(KEY_HOST, host).apply() },
             onSlotChange = { idx -> prefs.edit().putInt(KEY_SLOT, idx).apply() },
             onPartyModeChange = { enabled -> prefs.edit().putBoolean(KEY_PARTY_MODE, enabled).apply() },
@@ -116,6 +118,7 @@ class MainActivity : ComponentActivity() {
             onMirrorFpsChange = { fps -> prefs.edit().putInt(Prefs.KEY_MIRROR_FPS, fps).apply() },
             onMirrorIdleChange = { s -> prefs.edit().putInt(Prefs.KEY_MIRROR_IDLE_S, s).apply() },
             onMirrorOnMeteredChange = { on -> prefs.edit().putBoolean(Prefs.KEY_MIRROR_ON_METERED, on).apply() },
+            onTermZoomChange = { z -> prefs.edit().putFloat(Prefs.KEY_TERM_ZOOM, z).apply() },
             onStartCapture = ::startCapture,
             onStopCapture = ::stopCapture,
         )

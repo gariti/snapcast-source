@@ -33,6 +33,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
@@ -150,9 +152,36 @@ fun DesktopCanvas(
         }
     }
 
-    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode) {
+    // The terminal's text size survives the app being killed — you set it once
+    // for your eyes, not once per session. Written when the pinch settles
+    // rather than on every frame of it.
+    LaunchedEffect(app.termZoom) {
+        kotlinx.coroutines.delay(600)
+        app.onTermZoomChange(app.termZoom)
+    }
+
+    // Pinching the picture asks the bridge for a BIGGER capture rather than
+    // magnifying the pixels it already sent: `lattice-link` clamps width to
+    // 240…1920 and hands it to ffmpeg's scaler, so this costs bandwidth and
+    // nothing else — and only while somebody is actually zoomed in.
+    //
+    // Settled and quantized first. Every width change restarts wf-recorder on
+    // the desktop, and a restart per pinch frame is a stutter machine.
+    var mirrorZoom by remember { mutableStateOf(1f) }
+    var settledZoom by remember { mutableStateOf(1f) }
+    LaunchedEffect(mirrorZoom) {
+        kotlinx.coroutines.delay(400)
+        settledZoom = mirrorZoom
+    }
+    val baseWidth = if (wholeOutput) 1024 else 768
+    val mirrorWidth = remember(baseWidth, settledZoom) {
+        val want = (baseWidth * settledZoom).toInt()
+        ((want + 255) / 256 * 256).coerceIn(baseWidth, 1920)
+    }
+
+    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode, mirrorWidth) {
         if (live && !termMode && fallback != null) {
-            Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = fps, width = if (wholeOutput) 1024 else 768)
+            Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = fps, width = mirrorWidth)
         } else {
             Link.mirror(on = false)
         }
@@ -161,7 +190,7 @@ fun DesktopCanvas(
     // Watchdog: an "on" can get lost in a link or bridge restart, and a
     // bridge that restarts forgets what it was showing. Whenever the mirror
     // should be live and no frame has arrived for 3 s, ask again.
-    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode) {
+    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode, mirrorWidth) {
         while (live && !termMode && fallback != null) {
             kotlinx.coroutines.delay(2500)
             val now = System.currentTimeMillis()
@@ -173,7 +202,7 @@ fun DesktopCanvas(
             val gap = maxOf(4000L, 3000L / fps.coerceAtLeast(1))
             val silent = if (last == 0L) now - Link.mirrorAskedAt > 6000 else now - last > gap
             if (silent) {
-                Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = fps, width = if (wholeOutput) 1024 else 768)
+                Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = fps, width = mirrorWidth)
             }
         }
     }
@@ -214,6 +243,8 @@ fun DesktopCanvas(
                     screen = termScreen,
                     enabled = ready && termLive,
                     waiting = pausedWhy ?: if (!termLive) "terminal paused" else null,
+                    zoom = app.termZoom,
+                    onZoom = { app.termZoom = it },
                     onScroll = { Link.termScroll(it) },
                     onSwipe = { dir ->
                         Link.act(JSONObject().put(
@@ -224,7 +255,7 @@ fun DesktopCanvas(
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                MirrorView(frame = frame, enabled = ready)
+                MirrorView(frame = frame, enabled = ready, onZoom = { mirrorZoom = it })
                 if (pausedWhy != null) {
                     Text(
                         pausedWhy,
@@ -257,8 +288,11 @@ const val AGENT_APP_PREFIX = "tmux-attach-"
 private fun isMetered(ctx: android.content.Context): Boolean =
     ctx.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered == true
 
+/** How far two fingers will magnify the mirror's picture. */
+private const val MIRROR_MAX_ZOOM = 5f
+
 @Composable
-fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
+fun MirrorView(frame: Link.Frame?, enabled: Boolean, onZoom: (Float) -> Unit = {}) {
     // The picture on screen is decoupled from the newest frame so a swipe can
     // slide the OLD window out and the NEW one in: `shown` is what we draw,
     // `offset` is its horizontal translation in px, `awaitingWin` is set while
@@ -268,7 +302,45 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
     var awaitingFrom by remember { mutableStateOf<Long?>(null) }
     var swipeDir by remember { mutableStateOf(0) }
     var widthPx by remember { mutableStateOf(1f) }
+    var heightPx by remember { mutableStateOf(1f) }
     val scope = rememberCoroutineScope()
+
+    // Pinch zoom. `scale` magnifies the picture about wherever the fingers
+    // were, `pan` slides it, and pan is clamped so the picture always covers
+    // the frame — there is never a band of background down one side.
+    //
+    // The canvas gets `scale` back out because a 768-wide capture is 768 wide
+    // however hard you pinch: it asks the bridge for a bigger one rather than
+    // hand you soft pixels.
+    var scale by remember { mutableStateOf(1f) }
+    var pan by remember { mutableStateOf(Offset.Zero) }
+    var lastWin by remember { mutableStateOf<Long?>(null) }
+    val reportZoom by androidx.compose.runtime.rememberUpdatedState(onZoom)
+
+    fun clampPan(p: Offset, s: Float): Offset =
+        if (s <= 1f) Offset.Zero else Offset(
+            p.x.coerceIn((1f - s) * widthPx, 0f),
+            p.y.coerceIn((1f - s) * heightPx, 0f),
+        )
+
+    fun zoomBy(zoom: Float, move: Offset, about: Offset) {
+        val next = (scale * zoom).coerceIn(1f, MIRROR_MAX_ZOOM)
+        val k = next / scale
+        // Whatever is under the fingers stays under them.
+        val kept = Offset(about.x - (about.x - pan.x) * k, about.y - (about.y - pan.y) * k)
+        scale = next
+        pan = clampPan(kept + move, next)
+    }
+
+    fun settleZoom() {
+        // Forgiving bottom end: pinch roughly back to life size and it snaps,
+        // so you never end up stuck at 1.03× wondering why it looks soft.
+        if (scale < 1.12f) {
+            scale = 1f
+            pan = Offset.Zero
+        }
+        reportZoom(scale)
+    }
 
     // Animations run in the composable's own scope, never inside a
     // LaunchedEffect keyed on the frame: a new frame every 250 ms would cancel
@@ -284,6 +356,16 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
     }
     LaunchedEffect(frame) {
         val f = frame ?: run { shown = null; return@LaunchedEffect }
+        // A different window is a different picture: drop the magnification
+        // rather than land the user in the corner of something they have not
+        // seen yet. The mirror follows desktop focus, so this fires whether or
+        // not the swipe that changed window came from the phone.
+        if (lastWin != null && f.win != lastWin && scale > 1f) {
+            scale = 1f
+            pan = Offset.Zero
+            reportZoom(1f)
+        }
+        lastWin = f.win
         val waiting = awaitingFrom
         if (waiting != null && f.win != waiting) {
             // The next window's first picture: bring it in from the far side.
@@ -314,9 +396,17 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
             .clip(RoundedCornerShape(6.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))
-            .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
+            .onSizeChanged {
+                widthPx = it.width.toFloat().coerceAtLeast(1f)
+                heightPx = it.height.toFloat().coerceAtLeast(1f)
+            }
             .mirrorGestures(
                 enabled = enabled,
+                scaleOf = { scale },
+                panOf = { pan },
+                onZoomBy = { zoom, move, about -> zoomBy(zoom, move, about) },
+                onZoomEnd = { settleZoom() },
+                onPanBy = { d -> pan = clampPan(pan + d, scale) },
                 onFollow = { dx -> scope.launch { offset.snapTo(dx * 0.85f) } },
                 onSwipe = { dir ->
                     // dir = -1: content goes left (next window), +1: right (previous).
@@ -334,7 +424,15 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
         if (bmp != null) {
             Image(
                 bmp.asImageBitmap(), contentDescription = "desktop mirror",
-                modifier = Modifier.fillMaxSize().graphicsLayer { translationX = offset.value },
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    // Origin top-left so the magnification is plain arithmetic
+                    // at the tap end: content = (touch − pan) / scale.
+                    transformOrigin = TransformOrigin(0f, 0f)
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offset.value + pan.x
+                    translationY = pan.y
+                },
                 contentScale = ContentScale.FillBounds,
             )
         } else {
@@ -343,21 +441,45 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
                 Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.labelMedium,
             )
         }
+        if (scale > 1.01f) {
+            Text(
+                "%.1f×".format(scale),
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
     }
 }
 
 /**
- * One gesture vocabulary for the mirror, resolved from a single touch:
+ * One gesture vocabulary for the mirror, resolved from the pointers themselves:
  *   tap            click where you tapped        double tap   double click
  *   long press     right click                   long press + move   drag (left held)
  *   swipe ← / →    focus the next / previous window — the mirror follows focus,
  *                  so the picture switches with it (every window in a column
  *                  counts, not just columns)
+ *   pinch          magnify the picture, about the fingers; two-finger drag
+ *                  moves it, and once magnified a one-finger drag moves it too
+ *                  (the window-changing swipe wants the whole picture on screen
+ *                  to mean anything)
+ *
  * `onFollow` gets the horizontal displacement while a swipe is forming,
  * `onSwipe` its direction once committed, `onLetGo` a release without one.
+ * Every tap is mapped back through the magnification before it is sent, so a
+ * click lands where the finger was in the WINDOW, not on the screen.
  */
 private fun Modifier.mirrorGestures(
     enabled: Boolean,
+    scaleOf: () -> Float,
+    panOf: () -> Offset,
+    onZoomBy: (Float, Offset, Offset) -> Unit,
+    onZoomEnd: () -> Unit,
+    onPanBy: (Offset) -> Unit,
     onFollow: (Float) -> Unit,
     onSwipe: (Int) -> Unit,
     onLetGo: () -> Unit,
@@ -367,6 +489,7 @@ private fun Modifier.mirrorGestures(
     val swipeMin = 72.dp.toPx()
     val longPressMs = 350L
     var lastTapAt = 0L
+    val pinch = Pinch()
     awaitEachGesture {
         val down = awaitFirstDown()
         down.consume()
@@ -377,17 +500,46 @@ private fun Modifier.mirrorGestures(
         var dragging = false
         var swiped = false
         var following = false
+        var pinching = false
+
+        // Where a touch points in the WINDOW's own coordinates: the picture
+        // may be magnified and slid under the finger.
+        fun uv(p: Offset): Offset {
+            val s = scaleOf()
+            val q = panOf()
+            return Offset(
+                (((p.x - q.x) / s) / size.width).coerceIn(0f, 1f),
+                (((p.y - q.y) / s) / size.height).coerceIn(0f, 1f),
+            )
+        }
+
         while (true) {
             val ev = withTimeoutOrNull(16L) { awaitPointerEvent() }
             val now = System.currentTimeMillis()
             if (ev == null) {
                 // Still pressed, nothing new: a long press becomes a drag the
                 // moment the finger moves, or a right click if it never does.
-                if (!moved && !dragging && now - t0 > longPressMs) {
-                    Link.pointerIn(start.x / size.width, start.y / size.height)
+                if (!pinching && !moved && !dragging && now - t0 > longPressMs) {
+                    val u = uv(start)
+                    Link.pointerIn(u.x, u.y)
                     Link.button("left", true)
                     dragging = true
                 }
+                continue
+            }
+            val pressed = ev.changes.count { it.pressed }
+            if (pinching || pressed >= 2) {
+                if (!pinching) {
+                    // A second finger cancels whatever the first was becoming:
+                    // a held button must not stay held through a pinch.
+                    pinching = true
+                    if (dragging) { Link.button("left", false); dragging = false }
+                    if (following) { onLetGo(); following = false }
+                    pinch.reset()
+                }
+                ev.changes.forEach { it.consume() }
+                if (pressed == 0) { onZoomEnd(); break }
+                pinch.update(ev)?.let { onZoomBy(it.zoom, it.pan, it.centroid) }
                 continue
             }
             val ch = ev.changes.firstOrNull() ?: continue
@@ -404,7 +556,8 @@ private fun Modifier.mirrorGestures(
                         }
                     }
                     !moved -> {
-                        Link.pointerIn(start.x / size.width, start.y / size.height)
+                        val u = uv(start)
+                        Link.pointerIn(u.x, u.y)
                         if (now - lastTapAt < 300) {
                             Link.click("left"); Link.click("left")
                             lastTapAt = 0
@@ -417,12 +570,18 @@ private fun Modifier.mirrorGestures(
                 }
                 break
             }
+            val prev = pos
             pos = ch.position
             val dx = pos.x - start.x
             val dy = pos.y - start.y
             if (!moved && (abs(dx) > slop || abs(dy) > slop)) moved = true
             if (dragging) {
-                Link.pointerIn(pos.x / size.width, pos.y / size.height)
+                val u = uv(pos)
+                Link.pointerIn(u.x, u.y)
+            } else if (scaleOf() > 1.01f) {
+                // Magnified: one finger moves the picture. Tap, double tap and
+                // long press all still mean what they meant.
+                if (moved) onPanBy(pos - prev)
             } else if (!swiped && moved) {
                 // Mostly-horizontal motion drags the picture with the finger.
                 if (abs(dx) > abs(dy)) {
