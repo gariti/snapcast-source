@@ -94,11 +94,12 @@ import kotlin.math.abs
 
 /** Everything the four tabs share. Owned by MainActivity, seeded from prefs. */
 class AppState(
-    host: String, slotIndex: Int, partyMode: Boolean, psk: String,
+    host: String, slotIndex: Int, partyMode: Boolean, psk: String, mirrorFps: Int,
     val onHostChange: (String) -> Unit,
     val onSlotChange: (Int) -> Unit,
     val onPartyModeChange: (Boolean) -> Unit,
     val onPskChange: (String) -> Unit,
+    val onMirrorFpsChange: (Int) -> Unit,
     val onStartCapture: (String, Int, String) -> Unit,
     val onStopCapture: () -> Unit,
 ) {
@@ -106,6 +107,7 @@ class AppState(
     var slotIndex by mutableStateOf(slotIndex)
     var partyMode by mutableStateOf(partyMode)
     var psk by mutableStateOf(psk)
+    var mirrorFps by mutableStateOf(mirrorFps)
 }
 
 enum class Tab(val label: String) { Desktop("Desktop"), Input("Input"), Windows("Windows"), Audio("Audio"), Settings("Settings") }
@@ -180,7 +182,7 @@ fun LatticeApp(app: AppState) {
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
-                Tab.Desktop -> DesktopScreen(ready = bridgeUp && (linkState as? ControlChannelClient.LinkState.Connected)?.proto?.let { it >= 2 } == true)
+                Tab.Desktop -> DesktopScreen(app, ready = bridgeUp && (linkState as? ControlChannelClient.LinkState.Connected)?.proto?.let { it >= 2 } == true)
                 Tab.Input -> InputScreen(ready = bridgeUp && (linkState as? ControlChannelClient.LinkState.Connected)?.proto?.let { it >= 2 } == true)
                 Tab.Windows -> WindowsScreen()
                 Tab.Audio -> AudioScreen(app)
@@ -227,7 +229,8 @@ fun DictateFab() {
 // ---- Desktop tab -------------------------------------------------------------
 
 @Composable
-fun DesktopScreen(ready: Boolean) {
+fun DesktopScreen(app: AppState, ready: Boolean) {
+    val fps = app.mirrorFps
     val desk by Link.desk.collectAsState()
     val frame by Link.frame.collectAsState()
     val mirrorError by Link.mirrorError.collectAsState()
@@ -257,9 +260,9 @@ fun DesktopScreen(ready: Boolean) {
     // Focused window by default (the bridge follows focus); whole output on
     // request. Only while this tab is up, the app is in front, and the bridge
     // is reachable.
-    LaunchedEffect(fallback?.name, wholeOutput, ready, mirrorOn, foreground) {
+    LaunchedEffect(fallback?.name, wholeOutput, ready, mirrorOn, foreground, fps) {
         if (ready && mirrorOn && foreground && fallback != null) {
-            Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = 4, width = if (wholeOutput) 1024 else 768)
+            Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = fps, width = if (wholeOutput) 1024 else 768)
         } else {
             Link.mirror(on = false)
         }
@@ -268,16 +271,19 @@ fun DesktopScreen(ready: Boolean) {
     // Watchdog: an "on" can get lost in a link or bridge restart, and a
     // bridge that restarts forgets what it was showing. Whenever the mirror
     // should be live and no frame has arrived for 3 s, ask again.
-    LaunchedEffect(fallback?.name, wholeOutput, ready, mirrorOn, foreground) {
+    LaunchedEffect(fallback?.name, wholeOutput, ready, mirrorOn, foreground, fps) {
         while (ready && mirrorOn && foreground && fallback != null) {
             kotlinx.coroutines.delay(2500)
             val now = System.currentTimeMillis()
             val last = Link.lastFrameAt
             // A capture takes up to ~1 s to start and the focus can move a
             // few times in a row; only a real silence counts.
-            val silent = if (last == 0L) now - Link.mirrorAskedAt > 6000 else now - last > 4000
+            // At 1 fps a frame every second is normal; the silence threshold
+            // scales with the chosen rate.
+            val gap = maxOf(4000L, 3000L / fps.coerceAtLeast(1))
+            val silent = if (last == 0L) now - Link.mirrorAskedAt > 6000 else now - last > gap
             if (silent) {
-                Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = 4, width = if (wholeOutput) 1024 else 768)
+                Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = fps, width = if (wholeOutput) 1024 else 768)
             }
         }
     }

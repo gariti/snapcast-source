@@ -21,6 +21,9 @@ object Prefs {
     const val KEY_PSK = "pairing_psk"
     const val KEY_SLOT = "slot_index"
     const val KEY_PARTY_MODE = "party_mode"
+    /** Mirror capture rate in frames per second (1..15); 4 is the default. */
+    const val KEY_MIRROR_FPS = "mirror_fps"
+    const val DEFAULT_MIRROR_FPS = 4
 
     fun of(context: Context): SharedPreferences =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)

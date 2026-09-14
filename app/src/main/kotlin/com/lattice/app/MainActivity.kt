@@ -137,6 +137,7 @@ class MainActivity : ComponentActivity() {
         val initialHost = prefs.getString(KEY_HOST, DEFAULT_HOST) ?: DEFAULT_HOST
         val initialPartyMode = prefs.getBoolean(KEY_PARTY_MODE, false)
         val initialPsk = prefs.getString(KEY_PSK, "") ?: ""
+        val initialMirrorFps = prefs.getInt(Prefs.KEY_MIRROR_FPS, Prefs.DEFAULT_MIRROR_FPS).coerceIn(1, 15)
 
         // Persist the default host on first launch so MediaSessionBeaconService
         // (which reads prefs directly, not the in-memory UI state) can find it.
@@ -146,12 +147,14 @@ class MainActivity : ComponentActivity() {
 
         val appState = AppState(
             host = initialHost, slotIndex = initialSlotIdx, partyMode = initialPartyMode, psk = initialPsk,
+            mirrorFps = initialMirrorFps,
             onHostChange = { host -> prefs.edit().putString(KEY_HOST, host).apply() },
             onSlotChange = { idx -> prefs.edit().putInt(KEY_SLOT, idx).apply() },
             onPartyModeChange = { enabled -> prefs.edit().putBoolean(KEY_PARTY_MODE, enabled).apply() },
             // Store the canonical (normalized) code so the HMAC key matches the
             // desktop byte-for-byte.
             onPskChange = { psk -> prefs.edit().putString(KEY_PSK, PairingCrypto.normalize(psk)).apply() },
+            onMirrorFpsChange = { fps -> prefs.edit().putInt(Prefs.KEY_MIRROR_FPS, fps).apply() },
             onStartCapture = ::startCapture,
             onStopCapture = ::stopCapture,
         )
@@ -503,8 +506,26 @@ fun SettingsScreen(app: AppState) {
         )
 
         CastDetectionCard(hostBlank = app.host.isBlank())
+        MirrorSettingsCard(app)
         LinkDiagnosticsCard()
         Spacer(Modifier.height(72.dp))
+    }
+}
+
+@Composable
+fun MirrorSettingsCard(app: AppState) {
+    SectionCard("Mirror") {
+        Text("Frame rate", style = MaterialTheme.typography.labelLarge)
+        DimText("Each frame is a capture of the desktop's screen. 4 fps held the GPU at 60–70% while the mirror was open; 2 fps is about half that and still fine for reading.")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(1, 2, 4, 8).forEach { f ->
+                androidx.compose.material3.FilterChip(
+                    selected = app.mirrorFps == f,
+                    onClick = { app.mirrorFps = f; app.onMirrorFpsChange(f) },
+                    label = { Text("$f fps") },
+                )
+            }
+        }
     }
 }
 
