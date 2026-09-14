@@ -29,6 +29,8 @@ object Prefs {
     const val DEFAULT_MIRROR_IDLE_S = 60
     /** Keep mirroring on a metered (mobile data) network. */
     const val KEY_MIRROR_ON_METERED = "mirror_on_metered"
+    /** DesktopAuth.Enrol name: where the desktop-auth key stands with the desktop. */
+    const val KEY_AUTH_STATE = "desktop_auth_state"
 
     fun of(context: Context): SharedPreferences =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)

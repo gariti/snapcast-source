@@ -80,8 +80,45 @@ fun SettingsSheetContent(app: AppState) {
         )
 
         CastDetectionCard(hostBlank = app.host.isBlank())
+        DesktopAuthCard()
         MirrorSettingsCard(app)
         LinkDiagnosticsCard()
+    }
+}
+
+@Composable
+fun DesktopAuthCard() {
+    val ctx = LocalContext.current
+    val enrol by DesktopAuth.enrol.collectAsState()
+    val err by DesktopAuth.lastError.collectAsState()
+    val client by Link.client.collectAsState()
+    val st by (client?.state ?: MutableStateFlow(ControlChannelClient.LinkState.Disconnected)).collectAsState()
+    val linked = st is ControlChannelClient.LinkState.Connected
+    val desktopSpeaksAuth = (st as? ControlChannelClient.LinkState.Connected)?.caps?.contains("auth") == true
+    SectionCard("Desktop auth") {
+        DimText("Your fingerprint here can answer the desktop's sudo, permission and unlock prompts. The key lives in this phone's secure hardware and only signs after a fingerprint.")
+        TextRow("key", when (enrol) {
+            DesktopAuth.Enrol.NONE -> "none"
+            DesktopAuth.Enrol.PENDING -> "waiting for the desktop"
+            DesktopAuth.Enrol.TRUSTED -> "trusted" + (DesktopAuthKey.kid()?.let { " · $it" } ?: "")
+            DesktopAuth.Enrol.REVOKED -> "revoked by the desktop"
+            DesktopAuth.Enrol.INVALIDATED -> "invalidated (fingerprint added)"
+        })
+        TextRow("hardware", if (DesktopAuthKey.exists()) (if (DesktopAuthKey.isStrongBox()) "StrongBox" else "TEE") else "—")
+        err?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { DesktopAuth.enrol(ctx) }, enabled = linked && desktopSpeaksAuth) {
+                Text(if (enrol == DesktopAuth.Enrol.TRUSTED) "Enrol a new key" else "Enrol this phone")
+            }
+            if (DesktopAuthKey.exists()) {
+                androidx.compose.material3.OutlinedButton(onClick = { DesktopAuth.forget(ctx) }) { Text("Forget key") }
+            }
+        }
+        if (enrol == DesktopAuth.Enrol.PENDING) {
+            DimText("Now on the desktop: run `phone-auth enroll` and touch the sensor. The key is trusted the moment that succeeds.")
+        } else if (!desktopSpeaksAuth && linked) {
+            DimText("This desktop does not speak auth yet — deploy the phone-link broker first.")
+        }
     }
 }
 

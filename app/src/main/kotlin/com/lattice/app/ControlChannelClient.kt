@@ -618,6 +618,8 @@ class ControlChannelClient(
             // Terminal mode: reading and typing into a dispatched agent's tmux
             // session instead of mirroring a picture of its window.
             "term",
+            // Desktop auth: authq/authc in, authr/authe out (DesktopAuth).
+            "auth",
         )
 
         /**

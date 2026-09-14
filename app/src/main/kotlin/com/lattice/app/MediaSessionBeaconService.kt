@@ -118,6 +118,8 @@ class MediaSessionBeaconService : LifecycleService() {
                 // desktop through this same client.
                 ControlChannelClient.publish(it)
                 Link.attach(it, lifecycleScope)
+                // Desktop auth challenges ride the same link.
+                DesktopAuth.attach(this, it, lifecycleScope)
                 AudioRouteMonitor.attach(this, it, lifecycleScope)
             }
         }

@@ -26,6 +26,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Headphone awareness: the Bluetooth headset's name and battery level. -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Desktop auth: the phone's fingerprint unlocks a Keystore signing key
+         (DesktopAuthKey) whose signature the desktop accepts for sudo / polkit /
+         unlock. BiometricPrompt needs this; the key itself is gated in hardware. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <application
         android:allowBackup="true"
@@ -60,6 +64,20 @@
                 <data android:scheme="lattice" android:host="pair" />
             </intent-filter>
         </activity>
+
+        <!-- One desktop challenge at a time. Over the lock screen on purpose:
+             the desktop asks exactly when the phone is on the nightstand. -->
+        <activity
+            android:name=".AuthPromptActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.Lattice" />
+        <receiver
+            android:name=".AuthActionReceiver"
+            android:exported="false" />
 
         <service
             android:name=".AudioCaptureService"
