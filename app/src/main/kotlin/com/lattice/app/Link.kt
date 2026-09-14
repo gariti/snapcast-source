@@ -80,6 +80,17 @@ object Link {
     private val _mirrorError = MutableStateFlow<String?>(null)
     val mirrorError: StateFlow<String?> = _mirrorError.asStateFlow()
 
+    /**
+     * The agent terminal being read, parsed and ready to draw. Null whenever
+     * terminal mode is off or the bridge has not sent a screen yet.
+     */
+    private val _term = MutableStateFlow<Vt.Screen?>(null)
+    val term: StateFlow<Vt.Screen?> = _term.asStateFlow()
+
+    /** Why the bridge refused or dropped the terminal, when it did. */
+    private val _termError = MutableStateFlow<String?>(null)
+    val termError: StateFlow<String?> = _termError.asStateFlow()
+
     /** Raw PCM frames for ListenService; DROP_OLDEST keeps latency bounded. */
     val pcm = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
 
@@ -88,6 +99,12 @@ object Link {
 
     private var collector: Job? = null
     @Volatile private var mirrorOn = false
+    @Volatile private var termSession: String? = null
+    /** Wall-clock ms of the last screen; 0 when none since the open was asked for. */
+    @Volatile var lastTermAt: Long = 0L
+        private set
+    @Volatile var termAskedAt: Long = 0L
+        private set
     /** Wall-clock ms of the last decoded frame; 0 when none since the mirror was asked for. */
     @Volatile var lastFrameAt: Long = 0L
         private set
@@ -109,6 +126,8 @@ object Link {
         collector = null
         _client.value = null
         _frame.value = null
+        _term.value = null
+        termSession = null
         _listening.value = false
         _dict.value = DictState.Idle
     }
@@ -162,6 +181,35 @@ object Link {
             "mirror" -> {
                 _mirrorError.value = msg["err"] as? String
                 if (msg["on"] == false) mirrorOn = false
+            }
+            "termo" -> {
+                val session = msg["session"] as? String ?: return
+                // A screen from a terminal we already closed (or moved off)
+                // must not resurrect a stale one.
+                if (session != termSession) return
+                val d = msg["d"] as? ByteArray ?: return
+                fun n(k: String, dflt: Int) = (msg[k] as? Long)?.toInt() ?: dflt
+                val rows = n("rows", 24).coerceIn(1, 200)
+                lastTermAt = System.currentTimeMillis()
+                _termError.value = null
+                _term.value = Vt.Screen(
+                    session = session,
+                    cols = n("cols", 80).coerceIn(1, 500),
+                    rows = rows,
+                    cx = n("cx", -1), cy = n("cy", -1),
+                    off = n("off", 0), hist = n("hist", 0),
+                    title = msg["title"] as? String ?: "",
+                    lines = Vt.parse(d, rows),
+                )
+            }
+            "term" -> {
+                val err = (msg["err"] as? String)?.takeIf { it.isNotBlank() }
+                if (msg["op"] == "closed") {
+                    termSession = null
+                    _term.value = null
+                }
+                _termError.value = err
+                if (err != null) Log.w(TAG, "terminal: $err")
             }
         }
     }
@@ -241,6 +289,52 @@ object Link {
             )
         }
     }
+
+    /**
+     * Read a dispatched agent's tmux session. The phone finds the name in the
+     * focused window's app-id (`tmux-attach-<session>`), but the bridge checks
+     * it against the windows the desktop actually has before opening anything —
+     * keys into the wrong agent's session submit a prompt it then acts on.
+     */
+    fun term(session: String, hz: Int = 6) {
+        if (session == termSession) return
+        Log.i(TAG, "term(open $session)")
+        termSession = session
+        lastTermAt = 0L
+        termAskedAt = System.currentTimeMillis()
+        _term.value = null
+        _termError.value = null
+        _client.value?.post(mapOf("t" to "term", "op" to "open", "session" to session, "hz" to hz))
+    }
+
+    /** Ask again for the terminal we already believe is open (the watchdog). */
+    fun termReopen(hz: Int = 6) {
+        val s = termSession ?: return
+        termAskedAt = System.currentTimeMillis()
+        _client.value?.post(mapOf("t" to "term", "op" to "open", "session" to s, "hz" to hz))
+    }
+
+    fun termClose() {
+        if (termSession == null) return
+        Log.i(TAG, "term(close)")
+        termSession = null
+        _term.value = null
+        _client.value?.post(mapOf("t" to "term", "op" to "close"))
+    }
+
+    /** Show the screen `off` lines above the live tail; 0 follows it again. */
+    fun termScroll(off: Int) {
+        if (termSession == null) return
+        _client.value?.post(mapOf("t" to "term", "op" to "scroll", "off" to off.coerceAtLeast(0)))
+    }
+
+    /** Raw bytes into the pane — printable text and control bytes alike. */
+    fun termInput(bytes: ByteArray) {
+        if (bytes.isEmpty() || termSession == null) return
+        _client.value?.post(mapOf("t" to "termi", "d" to bytes))
+    }
+
+    fun termInput(text: String) = termInput(text.toByteArray())
 
     /** (u, v) inside the mirrored picture → the pointer lands there. */
     fun pointerIn(u: Float, v: Float) {

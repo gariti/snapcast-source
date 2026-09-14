@@ -121,6 +121,7 @@ enum class Tab(val label: String) { Desktop("Desktop"), Input("Input"), Windows(
 @Composable
 fun LatticeApp(app: AppState) {
     var tab by rememberSaveable { mutableStateOf(Tab.Desktop) }
+    val termScreen by Link.term.collectAsState()
     val client by Link.client.collectAsState()
     val linkState by (client?.state ?: kotlinx.coroutines.flow.MutableStateFlow(ControlChannelClient.LinkState.Disconnected)).collectAsState()
     val bridgeUp by (client?.bridgeUp ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
@@ -182,7 +183,10 @@ fun LatticeApp(app: AppState) {
                 }
             }
         },
-        floatingActionButton = { DictateFab() },
+        // The terminal owns the bottom strip while it is up: the FAB sits
+        // exactly over ⌫ ⏎ ^C, and dictating into the desktop's focused window
+        // is redundant when you have the session's own keyboard right there.
+        floatingActionButton = { if (!(tab == Tab.Desktop && termScreen != null)) DictateFab() },
         snackbarHost = { SnackbarHost(snackbar) { Snackbar(it) } },
     ) { pad ->
         Box(
@@ -307,8 +311,43 @@ fun DesktopScreen(app: AppState, ready: Boolean) {
     // the phone now and then, and the network is not metered.
     val live = ready && mirrorOn && foreground && !idle && !meteredBlock
 
-    LaunchedEffect(fallback?.name, wholeOutput, live, fps) {
-        if (live && fallback != null) {
+    // --- terminal mode -----------------------------------------------------
+    // A dispatched agent's terminal is a `tmux-attach-<session>` window. When
+    // that is what has focus, reading the session's pane beats a picture of
+    // it: the text is legible, it scrolls, and the phone keyboard answers
+    // Claude's questions. A picture of a terminal can do none of that.
+    val agentSession = focused?.app?.removePrefix(AGENT_APP_PREFIX)
+        ?.takeIf { focused.app.startsWith(AGENT_APP_PREFIX) && it.isNotEmpty() }
+    // Sticky per window: flipping to the mirror on an agent window is the
+    // user's call and must survive the next frame, but a different window
+    // starts from the default again.
+    var mirrorFor by rememberSaveable { mutableStateOf<String?>(null) }
+    val termMode = agentSession != null && !wholeOutput && mirrorFor != agentSession
+    val termScreen by Link.term.collectAsState()
+    val termError by Link.termError.collectAsState()
+    val termLive = ready && mirrorOn && foreground && !idle && !meteredBlock && termMode
+
+    LaunchedEffect(agentSession, termLive) {
+        if (termLive && agentSession != null) Link.term(agentSession) else Link.termClose()
+    }
+    DisposableEffect(Unit) { onDispose { Link.termClose() } }
+    // Same watchdog the mirror has, for the same reason: an "open" can be lost
+    // in a link or bridge restart, and a restarted bridge has forgotten what
+    // it was following.
+    LaunchedEffect(agentSession, termLive) {
+        while (termLive && agentSession != null) {
+            kotlinx.coroutines.delay(3000)
+            val now = System.currentTimeMillis()
+            val last = Link.lastTermAt
+            val silent = if (last == 0L) now - Link.termAskedAt > 6000 else now - last > 20000
+            // A session with nothing happening in it legitimately sends
+            // nothing, so only re-ask when we never got a first screen.
+            if (silent && last == 0L) Link.termReopen()
+        }
+    }
+
+    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode) {
+        if (live && !termMode && fallback != null) {
             Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = fps, width = if (wholeOutput) 1024 else 768)
         } else {
             Link.mirror(on = false)
@@ -318,8 +357,8 @@ fun DesktopScreen(app: AppState, ready: Boolean) {
     // Watchdog: an "on" can get lost in a link or bridge restart, and a
     // bridge that restarts forgets what it was showing. Whenever the mirror
     // should be live and no frame has arrived for 3 s, ask again.
-    LaunchedEffect(fallback?.name, wholeOutput, live, fps) {
-        while (live && fallback != null) {
+    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode) {
+        while (live && !termMode && fallback != null) {
             kotlinx.coroutines.delay(2500)
             val now = System.currentTimeMillis()
             val last = Link.lastFrameAt
@@ -341,41 +380,86 @@ fun DesktopScreen(app: AppState, ready: Boolean) {
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
         ) {
-            FilterChip(selected = !wholeOutput, onClick = { wholeOutput = false }, label = { Text("focused window") })
+            // On an agent window the two modes sit side by side; everywhere
+            // else "focused window" means the mirror, as it always has.
+            if (agentSession != null && !wholeOutput) {
+                FilterChip(selected = termMode, onClick = { mirrorFor = null }, label = { Text("terminal") })
+                FilterChip(selected = !termMode, onClick = { mirrorFor = agentSession }, label = { Text("mirror") })
+            } else {
+                FilterChip(selected = !wholeOutput, onClick = { wholeOutput = false }, label = { Text("focused window") })
+            }
             outputs.forEach { o ->
                 FilterChip(selected = wholeOutput && fallback?.name == o.name, onClick = { wholeOutput = true; output = o.name }, label = { Text(o.name) })
             }
             FilterChip(selected = mirrorOn, onClick = { mirrorOn = !mirrorOn }, label = { Text(if (mirrorOn) "live" else "paused") })
         }
-        val title = if (!wholeOutput) focused?.let { "${it.app} — ${it.title}" } ?: "no focused window" else fallback?.let { "${it.name} · ${it.w}×${it.h}" } ?: ""
+        val title = when {
+            termMode -> termScreen?.let { "${it.session} · ${it.cols}×${it.rows}" } ?: (agentSession ?: "")
+            !wholeOutput -> focused?.let { "${it.app} — ${it.title}" } ?: "no focused window"
+            else -> fallback?.let { "${it.name} · ${it.w}×${it.h}" } ?: ""
+        }
         Text(
             title, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
         if (!ready) NoticeCard("Desktop not reachable", "The mirror needs the desktop's bridge. Check Settings for the link state.", Modifier.padding(16.dp))
-        mirrorError?.let { Text("Mirror: $it", Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
-        // The picture takes everything that is left, letterboxed to its own
-        // aspect ratio; taps land inside the window it shows.
+        val surfaceError = if (termMode) termError?.let { "Terminal: $it" } else mirrorError?.let { "Mirror: $it" }
+        surfaceError?.let { Text(it, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
+
+        val pausedWhy = when {
+            !ready || !mirrorOn -> null
+            idle -> "paused — no touch for ${app.mirrorIdleSeconds} s · tap to resume"
+            meteredBlock -> "paused on mobile data · allow it under Settings › Mirror"
+            else -> null
+        }
+        // The surface takes everything that is left. In terminal mode it is
+        // text on a grid; otherwise the mirror's picture, letterboxed to its
+        // own aspect ratio, with taps landing inside the window it shows.
         Box(Modifier.weight(1f).fillMaxWidth().padding(4.dp), contentAlignment = Alignment.Center) {
-            MirrorView(frame = frame, enabled = ready)
-            val pausedWhy = when {
-                !ready || !mirrorOn -> null
-                idle -> "paused — no touch for ${app.mirrorIdleSeconds} s · tap to resume"
-                meteredBlock -> "paused on mobile data · allow it under Settings › Mirror"
-                else -> null
-            }
-            if (pausedWhy != null) {
-                Text(
-                    pausedWhy,
-                    Modifier
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.labelMedium,
+            if (termMode) {
+                TerminalView(
+                    screen = termScreen,
+                    enabled = ready && termLive,
+                    waiting = pausedWhy ?: if (!termLive) "terminal paused" else null,
+                    onScroll = { Link.termScroll(it) },
+                    onSwipe = { dir ->
+                        Link.act(JSONObject().put(
+                            if (dir < 0) "FocusWindowDownOrColumnRight" else "FocusWindowUpOrColumnLeft",
+                            JSONObject(),
+                        ))
+                    },
+                    modifier = Modifier.fillMaxSize(),
                 )
+            } else {
+                MirrorView(frame = frame, enabled = ready)
+                if (pausedWhy != null) {
+                    Text(
+                        pausedWhy,
+                        Modifier
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
             }
+        }
+        if (termMode) {
+            TerminalKeys(
+                enabled = ready && termLive && termScreen != null,
+                onInput = { Link.termInput(it) },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
+
+/**
+ * The compositor app-id every dispatched agent's terminal carries. The Wrangler
+ * opens a `foot` whose app-id is this plus the tmux session name
+ * (`scripts/wrangler-dispatch.sh`), which is the whole of how the phone knows
+ * an agent session when it sees one.
+ */
+const val AGENT_APP_PREFIX = "tmux-attach-"
 
 private fun isMetered(ctx: android.content.Context): Boolean =
     ctx.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered == true

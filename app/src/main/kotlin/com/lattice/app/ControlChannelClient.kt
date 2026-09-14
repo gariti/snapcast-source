@@ -615,6 +615,9 @@ class ControlChannelClient(
         private val CLIENT_CAPS = listOf(
             "media", "np", "cmd", "spectrum-udp", "pcm-party", "art",
             "audio", "desk", "act", "thumb", "input", "mirror", "dict", "listen",
+            // Terminal mode: reading and typing into a dispatched agent's tmux
+            // session instead of mirroring a picture of its window.
+            "term",
         )
 
         /**
