@@ -95,11 +95,14 @@ import kotlin.math.abs
 /** Everything the four tabs share. Owned by MainActivity, seeded from prefs. */
 class AppState(
     host: String, slotIndex: Int, partyMode: Boolean, psk: String, mirrorFps: Int,
+    mirrorIdleSeconds: Int, mirrorOnMetered: Boolean,
     val onHostChange: (String) -> Unit,
     val onSlotChange: (Int) -> Unit,
     val onPartyModeChange: (Boolean) -> Unit,
     val onPskChange: (String) -> Unit,
     val onMirrorFpsChange: (Int) -> Unit,
+    val onMirrorIdleChange: (Int) -> Unit,
+    val onMirrorOnMeteredChange: (Boolean) -> Unit,
     val onStartCapture: (String, Int, String) -> Unit,
     val onStopCapture: () -> Unit,
 ) {
@@ -108,6 +111,8 @@ class AppState(
     var partyMode by mutableStateOf(partyMode)
     var psk by mutableStateOf(psk)
     var mirrorFps by mutableStateOf(mirrorFps)
+    var mirrorIdleSeconds by mutableStateOf(mirrorIdleSeconds)
+    var mirrorOnMetered by mutableStateOf(mirrorOnMetered)
 }
 
 enum class Tab(val label: String) { Desktop("Desktop"), Input("Input"), Windows("Windows"), Audio("Audio"), Settings("Settings") }
@@ -180,7 +185,21 @@ fun LatticeApp(app: AppState) {
         floatingActionButton = { DictateFab() },
         snackbarHost = { SnackbarHost(snackbar) { Snackbar(it) } },
     ) { pad ->
-        Box(Modifier.padding(pad).fillMaxSize()) {
+        Box(
+            Modifier
+                .padding(pad)
+                .fillMaxSize()
+                // Every touch anywhere in the app counts as "using it"; seen in
+                // the Initial pass so no child gesture is disturbed.
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                            Interaction.touch()
+                        }
+                    }
+                },
+        ) {
             when (tab) {
                 Tab.Desktop -> DesktopScreen(app, ready = bridgeUp && (linkState as? ControlChannelClient.LinkState.Connected)?.proto?.let { it >= 2 } == true)
                 Tab.Input -> InputScreen(ready = bridgeUp && (linkState as? ControlChannelClient.LinkState.Connected)?.proto?.let { it >= 2 } == true)
@@ -260,8 +279,36 @@ fun DesktopScreen(app: AppState, ready: Boolean) {
     // Focused window by default (the bridge follows focus); whole output on
     // request. Only while this tab is up, the app is in front, and the bridge
     // is reachable.
-    LaunchedEffect(fallback?.name, wholeOutput, ready, mirrorOn, foreground, fps) {
-        if (ready && mirrorOn && foreground && fallback != null) {
+    // Idle: no touch anywhere in the app for the configured stretch.
+    val lastTouch by Interaction.lastTouch.collectAsState()
+    var idle by remember { mutableStateOf(false) }
+    LaunchedEffect(lastTouch, app.mirrorIdleSeconds) {
+        idle = false
+        if (app.mirrorIdleSeconds > 0) {
+            kotlinx.coroutines.delay(app.mirrorIdleSeconds * 1000L)
+            idle = true
+        }
+    }
+    // Metered: mobile data (or a hotspot) unless allowed in Settings.
+    val ctx = LocalContext.current
+    var metered by remember { mutableStateOf(isMetered(ctx)) }
+    DisposableEffect(Unit) {
+        val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java)
+        val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(n: android.net.Network, c: android.net.NetworkCapabilities) { metered = isMetered(ctx) }
+            override fun onAvailable(n: android.net.Network) { metered = isMetered(ctx) }
+            override fun onLost(n: android.net.Network) { metered = isMetered(ctx) }
+        }
+        cm.registerDefaultNetworkCallback(cb)
+        onDispose { runCatching { cm.unregisterNetworkCallback(cb) } }
+    }
+    val meteredBlock = metered && !app.mirrorOnMetered
+    // Live only while this tab is up, the app is in front, someone is touching
+    // the phone now and then, and the network is not metered.
+    val live = ready && mirrorOn && foreground && !idle && !meteredBlock
+
+    LaunchedEffect(fallback?.name, wholeOutput, live, fps) {
+        if (live && fallback != null) {
             Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = fps, width = if (wholeOutput) 1024 else 768)
         } else {
             Link.mirror(on = false)
@@ -271,8 +318,8 @@ fun DesktopScreen(app: AppState, ready: Boolean) {
     // Watchdog: an "on" can get lost in a link or bridge restart, and a
     // bridge that restarts forgets what it was showing. Whenever the mirror
     // should be live and no frame has arrived for 3 s, ask again.
-    LaunchedEffect(fallback?.name, wholeOutput, ready, mirrorOn, foreground, fps) {
-        while (ready && mirrorOn && foreground && fallback != null) {
+    LaunchedEffect(fallback?.name, wholeOutput, live, fps) {
+        while (live && fallback != null) {
             kotlinx.coroutines.delay(2500)
             val now = System.currentTimeMillis()
             val last = Link.lastFrameAt
@@ -311,9 +358,27 @@ fun DesktopScreen(app: AppState, ready: Boolean) {
         // aspect ratio; taps land inside the window it shows.
         Box(Modifier.weight(1f).fillMaxWidth().padding(4.dp), contentAlignment = Alignment.Center) {
             MirrorView(frame = frame, enabled = ready)
+            val pausedWhy = when {
+                !ready || !mirrorOn -> null
+                idle -> "paused — no touch for ${app.mirrorIdleSeconds} s · tap to resume"
+                meteredBlock -> "paused on mobile data · allow it under Settings › Mirror"
+                else -> null
+            }
+            if (pausedWhy != null) {
+                Text(
+                    pausedWhy,
+                    Modifier
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
         }
     }
 }
+
+private fun isMetered(ctx: android.content.Context): Boolean =
+    ctx.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered == true
 
 @Composable
 fun MirrorView(frame: Link.Frame?, enabled: Boolean) {

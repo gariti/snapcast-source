@@ -138,6 +138,8 @@ class MainActivity : ComponentActivity() {
         val initialPartyMode = prefs.getBoolean(KEY_PARTY_MODE, false)
         val initialPsk = prefs.getString(KEY_PSK, "") ?: ""
         val initialMirrorFps = prefs.getInt(Prefs.KEY_MIRROR_FPS, Prefs.DEFAULT_MIRROR_FPS).coerceIn(1, 15)
+        val initialMirrorIdle = prefs.getInt(Prefs.KEY_MIRROR_IDLE_S, Prefs.DEFAULT_MIRROR_IDLE_S).coerceIn(0, 3600)
+        val initialMirrorOnMetered = prefs.getBoolean(Prefs.KEY_MIRROR_ON_METERED, false)
 
         // Persist the default host on first launch so MediaSessionBeaconService
         // (which reads prefs directly, not the in-memory UI state) can find it.
@@ -147,7 +149,7 @@ class MainActivity : ComponentActivity() {
 
         val appState = AppState(
             host = initialHost, slotIndex = initialSlotIdx, partyMode = initialPartyMode, psk = initialPsk,
-            mirrorFps = initialMirrorFps,
+            mirrorFps = initialMirrorFps, mirrorIdleSeconds = initialMirrorIdle, mirrorOnMetered = initialMirrorOnMetered,
             onHostChange = { host -> prefs.edit().putString(KEY_HOST, host).apply() },
             onSlotChange = { idx -> prefs.edit().putInt(KEY_SLOT, idx).apply() },
             onPartyModeChange = { enabled -> prefs.edit().putBoolean(KEY_PARTY_MODE, enabled).apply() },
@@ -155,6 +157,8 @@ class MainActivity : ComponentActivity() {
             // desktop byte-for-byte.
             onPskChange = { psk -> prefs.edit().putString(KEY_PSK, PairingCrypto.normalize(psk)).apply() },
             onMirrorFpsChange = { fps -> prefs.edit().putInt(Prefs.KEY_MIRROR_FPS, fps).apply() },
+            onMirrorIdleChange = { s -> prefs.edit().putInt(Prefs.KEY_MIRROR_IDLE_S, s).apply() },
+            onMirrorOnMeteredChange = { on -> prefs.edit().putBoolean(Prefs.KEY_MIRROR_ON_METERED, on).apply() },
             onStartCapture = ::startCapture,
             onStopCapture = ::stopCapture,
         )
@@ -525,6 +529,24 @@ fun MirrorSettingsCard(app: AppState) {
                     label = { Text("$f fps") },
                 )
             }
+        }
+        Text("Pause when idle", style = MaterialTheme.typography.labelLarge)
+        DimText("No touch anywhere in the app for this long pauses the mirror; the next touch resumes it. It always pauses when the app is not in front or the phone is locked.")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(30 to "30 s", 60 to "1 min", 300 to "5 min", 0 to "never").forEach { (secs, label) ->
+                androidx.compose.material3.FilterChip(
+                    selected = app.mirrorIdleSeconds == secs,
+                    onClick = { app.mirrorIdleSeconds = secs; app.onMirrorIdleChange(secs) },
+                    label = { Text(label) },
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Mirror on mobile data", style = MaterialTheme.typography.labelLarge)
+                DimText("About 1 Mbit/s at 4 fps. Off = the mirror pauses on any metered network.")
+            }
+            Switch(checked = app.mirrorOnMetered, onCheckedChange = { app.mirrorOnMetered = it; app.onMirrorOnMeteredChange(it) })
         }
     }
 }

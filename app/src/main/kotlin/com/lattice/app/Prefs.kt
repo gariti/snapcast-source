@@ -24,6 +24,11 @@ object Prefs {
     /** Mirror capture rate in frames per second (1..15); 4 is the default. */
     const val KEY_MIRROR_FPS = "mirror_fps"
     const val DEFAULT_MIRROR_FPS = 4
+    /** Seconds without a touch before the mirror pauses; 0 = never. */
+    const val KEY_MIRROR_IDLE_S = "mirror_idle_s"
+    const val DEFAULT_MIRROR_IDLE_S = 60
+    /** Keep mirroring on a metered (mobile data) network. */
+    const val KEY_MIRROR_ON_METERED = "mirror_on_metered"
 
     fun of(context: Context): SharedPreferences =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
