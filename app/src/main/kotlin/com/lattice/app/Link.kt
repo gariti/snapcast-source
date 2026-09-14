@@ -88,6 +88,12 @@ object Link {
 
     private var collector: Job? = null
     @Volatile private var mirrorOn = false
+    /** Wall-clock ms of the last decoded frame; 0 when none since the mirror was asked for. */
+    @Volatile var lastFrameAt: Long = 0L
+        private set
+    /** Wall-clock ms of the last mirror(on=true) request. */
+    @Volatile var mirrorAskedAt: Long = 0L
+        private set
     private var actionSeq = 0L
 
     fun attach(client: ControlChannelClient, scope: CoroutineScope) {
@@ -117,6 +123,7 @@ object Link {
                 // stale picture.
                 if (!mirrorOn) return
                 val bmp = BitmapFactory.decodeByteArray(d, 0, d.size) ?: return
+                lastFrameAt = System.currentTimeMillis()
                 @Suppress("UNCHECKED_CAST")
                 val rect = (msg["rect"] as? List<Any?>)?.map { (it as? Long)?.toInt() ?: 0 }?.takeIf { it.size == 4 }?.toIntArray()
                 _frame.value = Frame(bmp, out, msg["win"] as? Long, rect)
@@ -219,6 +226,8 @@ object Link {
     fun mirror(on: Boolean, focused: Boolean = true, output: String = "", fps: Int = 4, width: Int = 768) {
         Log.i(TAG, "mirror(on=$on focused=$focused output=$output)")
         mirrorOn = on
+        lastFrameAt = 0L
+        mirrorAskedAt = System.currentTimeMillis()
         if (!on) {
             _client.value?.post(mapOf("t" to "mirror", "on" to false))
             _frame.value = null

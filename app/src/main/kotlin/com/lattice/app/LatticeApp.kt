@@ -265,6 +265,22 @@ fun DesktopScreen(ready: Boolean) {
         }
     }
     DisposableEffect(Unit) { onDispose { Link.mirror(on = false) } }
+    // Watchdog: an "on" can get lost in a link or bridge restart, and a
+    // bridge that restarts forgets what it was showing. Whenever the mirror
+    // should be live and no frame has arrived for 3 s, ask again.
+    LaunchedEffect(fallback?.name, wholeOutput, ready, mirrorOn, foreground) {
+        while (ready && mirrorOn && foreground && fallback != null) {
+            kotlinx.coroutines.delay(2500)
+            val now = System.currentTimeMillis()
+            val last = Link.lastFrameAt
+            // A capture takes up to ~1 s to start and the focus can move a
+            // few times in a row; only a real silence counts.
+            val silent = if (last == 0L) now - Link.mirrorAskedAt > 6000 else now - last > 4000
+            if (silent) {
+                Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = 4, width = if (wholeOutput) 1024 else 768)
+            }
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         // One thin strip: what is shown, and the two toggles.
@@ -306,6 +322,18 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
     var widthPx by remember { mutableStateOf(1f) }
     val scope = rememberCoroutineScope()
 
+    // Animations run in the composable's own scope, never inside a
+    // LaunchedEffect keyed on the frame: a new frame every 250 ms would cancel
+    // the slide mid-way and leave the picture parked off-screen (it did).
+    fun slideBackIn() {
+        scope.launch {
+            offset.snapTo(swipeDir * widthPx)
+            offset.animateTo(0f, androidx.compose.animation.core.tween(240, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+        }
+    }
+    fun springHome() {
+        scope.launch { offset.animateTo(0f, androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMedium)) }
+    }
     LaunchedEffect(frame) {
         val f = frame ?: run { shown = null; return@LaunchedEffect }
         val waiting = awaitingFrom
@@ -313,8 +341,7 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
             // The next window's first picture: bring it in from the far side.
             awaitingFrom = null
             shown = f.bitmap
-            offset.snapTo(swipeDir * widthPx)
-            offset.animateTo(0f, androidx.compose.animation.core.tween(240, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+            slideBackIn()
         } else if (waiting == null) {
             shown = f.bitmap
         }
@@ -326,7 +353,7 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
             if (awaitingFrom != null) {
                 awaitingFrom = null
                 frame?.let { shown = it.bitmap }
-                offset.animateTo(0f, androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMedium))
+                springHome()
             }
         }
     }
