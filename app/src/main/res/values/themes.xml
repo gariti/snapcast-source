@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The window's own background, painted before Compose gets a frame up. It
+      must be the SAME ground as Theme.kt's colour scheme or the app flashes the
+      wrong colour on every cold start — this shipped as
+      Theme.Material.Light.NoActionBar under a dark-first Compose theme, i.e. a
+      white flash every launch.
+
+      Day/night is the values-night qualifier rather than a DayNight parent:
+      there is no android:style/Theme.DeviceDefault.DayNight.NoActionBar.
+    -->
+    <style name="Theme.Lattice" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+        <item name="android:windowBackground">@color/ground</item>
+    </style>
+</resources>

@@ -1,0 +1,441 @@
+package com.lattice.app
+
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.systemGestureExclusion
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+import kotlin.math.abs
+
+// ---- the canvas -------------------------------------------------------------
+
+/**
+ * The whole of what the app shows: the window the desktop currently has
+ * focused, live. A picture of it from wf-recorder, or — when it is a dispatched
+ * agent's terminal — the tmux pane read as text.
+ *
+ * Never take this out of the composition to show something else. Its
+ * `DisposableEffect`s stop the mirror and close the terminal on disposal, so
+ * hiding it behind a sheet would tear down the stream you are about to come
+ * back to. The sheets draw OVER it for exactly that reason.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun DesktopCanvas(
+    app: AppState,
+    prefs: CanvasPrefs,
+    ready: Boolean,
+    agentSession: String?,
+    termMode: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val fps = app.mirrorFps
+    val desk by Link.desk.collectAsState()
+    val frame by Link.frame.collectAsState()
+    val mirrorError by Link.mirrorError.collectAsState()
+    val wholeOutput = prefs.wholeOutput
+    val output = prefs.output
+    val mirrorOn = prefs.mirrorOn
+    val outputs = desk.outputs
+    val focused = desk.focused
+    val fallback = outputs.firstOrNull { it.name == output } ?: outputs.firstOrNull { it.name == focused?.output } ?: outputs.firstOrNull()
+
+    // The mirror follows the activity: a locked phone or a backgrounded app
+    // must not keep wf-recorder and ~1 Mbit/s of frames running on the desktop.
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
+    var foreground by remember { mutableStateOf(lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) }
+    DisposableEffect(lifecycle) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> foreground = true
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> foreground = false
+                else -> {}
+            }
+        }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
+    }
+
+    // Focused window by default (the bridge follows focus); whole output on
+    // request. Only while this tab is up, the app is in front, and the bridge
+    // is reachable.
+    // Idle: no touch anywhere in the app for the configured stretch.
+    val lastTouch by Interaction.lastTouch.collectAsState()
+    var idle by remember { mutableStateOf(false) }
+    LaunchedEffect(lastTouch, app.mirrorIdleSeconds) {
+        idle = false
+        if (app.mirrorIdleSeconds > 0) {
+            kotlinx.coroutines.delay(app.mirrorIdleSeconds * 1000L)
+            idle = true
+        }
+    }
+    // Metered: mobile data (or a hotspot) unless allowed in Settings.
+    val ctx = LocalContext.current
+    var metered by remember { mutableStateOf(isMetered(ctx)) }
+    DisposableEffect(Unit) {
+        val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java)
+        val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(n: android.net.Network, c: android.net.NetworkCapabilities) { metered = isMetered(ctx) }
+            override fun onAvailable(n: android.net.Network) { metered = isMetered(ctx) }
+            override fun onLost(n: android.net.Network) { metered = isMetered(ctx) }
+        }
+        cm.registerDefaultNetworkCallback(cb)
+        onDispose { runCatching { cm.unregisterNetworkCallback(cb) } }
+    }
+    val meteredBlock = metered && !app.mirrorOnMetered
+    // Live only while the app is in front, someone is touching the phone now
+    // and then, and the network is not metered.
+    val live = ready && mirrorOn && foreground && !idle && !meteredBlock
+
+    // `agentSession` and `termMode` are decided by the shell — the input sheet
+    // routes its keystrokes by the same answer, so there is one place that
+    // works it out and everyone reads it.
+    val termScreen by Link.term.collectAsState()
+    val termError by Link.termError.collectAsState()
+    val termLive = ready && mirrorOn && foreground && !idle && !meteredBlock && termMode
+
+    LaunchedEffect(agentSession, termLive) {
+        if (termLive && agentSession != null) Link.term(agentSession) else Link.termClose()
+    }
+    DisposableEffect(Unit) { onDispose { Link.termClose() } }
+    // Same watchdog the mirror has, for the same reason: an "open" can be lost
+    // in a link or bridge restart, and a restarted bridge has forgotten what
+    // it was following.
+    LaunchedEffect(agentSession, termLive) {
+        while (termLive && agentSession != null) {
+            kotlinx.coroutines.delay(3000)
+            val now = System.currentTimeMillis()
+            val last = Link.lastTermAt
+            val silent = if (last == 0L) now - Link.termAskedAt > 6000 else now - last > 20000
+            // A session with nothing happening in it legitimately sends
+            // nothing, so only re-ask when we never got a first screen.
+            if (silent && last == 0L) Link.termReopen()
+        }
+    }
+
+    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode) {
+        if (live && !termMode && fallback != null) {
+            Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = fps, width = if (wholeOutput) 1024 else 768)
+        } else {
+            Link.mirror(on = false)
+        }
+    }
+    DisposableEffect(Unit) { onDispose { Link.mirror(on = false) } }
+    // Watchdog: an "on" can get lost in a link or bridge restart, and a
+    // bridge that restarts forgets what it was showing. Whenever the mirror
+    // should be live and no frame has arrived for 3 s, ask again.
+    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode) {
+        while (live && !termMode && fallback != null) {
+            kotlinx.coroutines.delay(2500)
+            val now = System.currentTimeMillis()
+            val last = Link.lastFrameAt
+            // A capture takes up to ~1 s to start and the focus can move a
+            // few times in a row; only a real silence counts.
+            // At 1 fps a frame every second is normal; the silence threshold
+            // scales with the chosen rate.
+            val gap = maxOf(4000L, 3000L / fps.coerceAtLeast(1))
+            val silent = if (last == 0L) now - Link.mirrorAskedAt > 6000 else now - last > gap
+            if (silent) {
+                Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = fps, width = if (wholeOutput) 1024 else 768)
+            }
+        }
+    }
+
+    // The chips that used to sit above the picture (terminal|mirror, the
+    // per-output whole-screen picks, live|paused) moved into the This-window
+    // sheet behind the title strip. The canvas is the picture and nothing else.
+    Column(modifier) {
+        if (!ready) NoticeCard("Desktop not reachable", "The mirror needs the desktop's bridge. Check Settings for the link state.", Modifier.padding(16.dp))
+        val surfaceError = if (termMode) termError?.let { "Terminal: $it" } else mirrorError?.let { "Mirror: $it" }
+        surfaceError?.let { Text(it, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
+
+        val pausedWhy = when {
+            !ready || !mirrorOn -> null
+            idle -> "paused — no touch for ${app.mirrorIdleSeconds} s · tap to resume"
+            meteredBlock -> "paused on mobile data · allow it under Settings › Mirror"
+            else -> null
+        }
+        // The surface takes everything that is left. In terminal mode it is
+        // text on a grid; otherwise the mirror's picture, letterboxed to its
+        // own aspect ratio, with taps landing inside the window it shows.
+        // No padding: the canvas is width-bound in portrait (the rail already
+        // took 48dp), and MirrorView letterboxes to its own aspect ratio, so
+        // every dp here is picture.
+        //
+        // systemGestureExclusion keeps Android's left-edge back gesture off the
+        // leftward swipe that moves focus. The system caps exclusions at 200dp
+        // per edge, so this protects the bottom of the canvas rather than all
+        // of it — and it is moot on this phone today, which is in 3-button
+        // mode (`settings get secure navigation_mode` = 0). It matters the day
+        // that changes.
+        Box(
+            Modifier.weight(1f).fillMaxWidth().systemGestureExclusion(),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (termMode) {
+                TerminalView(
+                    screen = termScreen,
+                    enabled = ready && termLive,
+                    waiting = pausedWhy ?: if (!termLive) "terminal paused" else null,
+                    onScroll = { Link.termScroll(it) },
+                    onSwipe = { dir ->
+                        Link.act(JSONObject().put(
+                            if (dir < 0) "FocusWindowDownOrColumnRight" else "FocusWindowUpOrColumnLeft",
+                            JSONObject(),
+                        ))
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                MirrorView(frame = frame, enabled = ready)
+                if (pausedWhy != null) {
+                    Text(
+                        pausedWhy,
+                        Modifier
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+        }
+        if (termMode) {
+            TerminalKeys(
+                enabled = ready && termLive && termScreen != null,
+                onInput = { Link.termInput(it) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/**
+ * The compositor app-id every dispatched agent's terminal carries. The Wrangler
+ * opens a `foot` whose app-id is this plus the tmux session name
+ * (`scripts/wrangler-dispatch.sh`), which is the whole of how the phone knows
+ * an agent session when it sees one.
+ */
+const val AGENT_APP_PREFIX = "tmux-attach-"
+
+private fun isMetered(ctx: android.content.Context): Boolean =
+    ctx.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered == true
+
+@Composable
+fun MirrorView(frame: Link.Frame?, enabled: Boolean) {
+    // The picture on screen is decoupled from the newest frame so a swipe can
+    // slide the OLD window out and the NEW one in: `shown` is what we draw,
+    // `offset` is its horizontal translation in px, `awaitingWin` is set while
+    // we wait for the first frame of a different window after a swipe.
+    var shown by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    val offset = remember { androidx.compose.animation.core.Animatable(0f) }
+    var awaitingFrom by remember { mutableStateOf<Long?>(null) }
+    var swipeDir by remember { mutableStateOf(0) }
+    var widthPx by remember { mutableStateOf(1f) }
+    val scope = rememberCoroutineScope()
+
+    // Animations run in the composable's own scope, never inside a
+    // LaunchedEffect keyed on the frame: a new frame every 250 ms would cancel
+    // the slide mid-way and leave the picture parked off-screen (it did).
+    fun slideBackIn() {
+        scope.launch {
+            offset.snapTo(swipeDir * widthPx)
+            offset.animateTo(0f, androidx.compose.animation.core.tween(240, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+        }
+    }
+    fun springHome() {
+        scope.launch { offset.animateTo(0f, androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMedium)) }
+    }
+    LaunchedEffect(frame) {
+        val f = frame ?: run { shown = null; return@LaunchedEffect }
+        val waiting = awaitingFrom
+        if (waiting != null && f.win != waiting) {
+            // The next window's first picture: bring it in from the far side.
+            awaitingFrom = null
+            shown = f.bitmap
+            slideBackIn()
+        } else if (waiting == null) {
+            shown = f.bitmap
+        }
+    }
+    // No other window answered the swipe: put the picture back.
+    LaunchedEffect(awaitingFrom) {
+        if (awaitingFrom != null) {
+            kotlinx.coroutines.delay(700)
+            if (awaitingFrom != null) {
+                awaitingFrom = null
+                frame?.let { shown = it.bitmap }
+                springHome()
+            }
+        }
+    }
+
+    val bmp = shown
+    val ratio = if (bmp != null && bmp.height > 0) bmp.width.toFloat() / bmp.height.toFloat() else 16f / 10f
+    Box(
+        Modifier
+            .aspectRatio(ratio)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))
+            .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
+            .mirrorGestures(
+                enabled = enabled,
+                onFollow = { dx -> scope.launch { offset.snapTo(dx * 0.85f) } },
+                onSwipe = { dir ->
+                    // dir = -1: content goes left (next window), +1: right (previous).
+                    swipeDir = -dir
+                    awaitingFrom = frame?.win ?: -1L
+                    scope.launch {
+                        offset.animateTo(dir * widthPx, androidx.compose.animation.core.tween(160, easing = androidx.compose.animation.core.FastOutLinearInEasing))
+                    }
+                },
+                onLetGo = {
+                    scope.launch { offset.animateTo(0f, androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMedium)) }
+                },
+            ),
+    ) {
+        if (bmp != null) {
+            Image(
+                bmp.asImageBitmap(), contentDescription = "desktop mirror",
+                modifier = Modifier.fillMaxSize().graphicsLayer { translationX = offset.value },
+                contentScale = ContentScale.FillBounds,
+            )
+        } else {
+            Text(
+                if (enabled) "waiting for the first frame…" else "mirror off",
+                Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.labelMedium,
+            )
+        }
+    }
+}
+
+/**
+ * One gesture vocabulary for the mirror, resolved from a single touch:
+ *   tap            click where you tapped        double tap   double click
+ *   long press     right click                   long press + move   drag (left held)
+ *   swipe ← / →    focus the next / previous window — the mirror follows focus,
+ *                  so the picture switches with it (every window in a column
+ *                  counts, not just columns)
+ * `onFollow` gets the horizontal displacement while a swipe is forming,
+ * `onSwipe` its direction once committed, `onLetGo` a release without one.
+ */
+private fun Modifier.mirrorGestures(
+    enabled: Boolean,
+    onFollow: (Float) -> Unit,
+    onSwipe: (Int) -> Unit,
+    onLetGo: () -> Unit,
+): Modifier = this.pointerInput(enabled) {
+    if (!enabled) return@pointerInput
+    val slop = viewConfiguration.touchSlop
+    val swipeMin = 72.dp.toPx()
+    val longPressMs = 350L
+    var lastTapAt = 0L
+    awaitEachGesture {
+        val down = awaitFirstDown()
+        down.consume()
+        val start = down.position
+        val t0 = System.currentTimeMillis()
+        var pos = start
+        var moved = false
+        var dragging = false
+        var swiped = false
+        var following = false
+        while (true) {
+            val ev = withTimeoutOrNull(16L) { awaitPointerEvent() }
+            val now = System.currentTimeMillis()
+            if (ev == null) {
+                // Still pressed, nothing new: a long press becomes a drag the
+                // moment the finger moves, or a right click if it never does.
+                if (!moved && !dragging && now - t0 > longPressMs) {
+                    Link.pointerIn(start.x / size.width, start.y / size.height)
+                    Link.button("left", true)
+                    dragging = true
+                }
+                continue
+            }
+            val ch = ev.changes.firstOrNull() ?: continue
+            ch.consume()
+            if (!ch.pressed) {
+                // Finger up: decide what the touch was.
+                when {
+                    swiped -> {}
+                    dragging -> {
+                        Link.button("left", false)
+                        if (!moved) {
+                            // Long press without motion: a right click, not a drag.
+                            Link.click("right")
+                        }
+                    }
+                    !moved -> {
+                        Link.pointerIn(start.x / size.width, start.y / size.height)
+                        if (now - lastTapAt < 300) {
+                            Link.click("left"); Link.click("left")
+                            lastTapAt = 0
+                        } else {
+                            Link.click("left")
+                            lastTapAt = now
+                        }
+                    }
+                    following -> onLetGo()
+                }
+                break
+            }
+            pos = ch.position
+            val dx = pos.x - start.x
+            val dy = pos.y - start.y
+            if (!moved && (abs(dx) > slop || abs(dy) > slop)) moved = true
+            if (dragging) {
+                Link.pointerIn(pos.x / size.width, pos.y / size.height)
+            } else if (!swiped && moved) {
+                // Mostly-horizontal motion drags the picture with the finger.
+                if (abs(dx) > abs(dy)) {
+                    following = true
+                    onFollow(dx)
+                }
+                if (now - t0 < 600 && abs(dx) > swipeMin && abs(dx) > 2 * abs(dy)) {
+                    swiped = true
+                    // Content follows the finger: swipe left shows what is to the right.
+                    Link.act(JSONObject().put(if (dx < 0) "FocusWindowDownOrColumnRight" else "FocusWindowUpOrColumnLeft", JSONObject()))
+                    onSwipe(if (dx < 0) -1 else 1)
+                }
+            }
+        }
+    }
+}

@@ -65,7 +65,12 @@ object Link {
     private val _frame = MutableStateFlow<Frame?>(null)
     val frame: StateFlow<Frame?> = _frame.asStateFlow()
 
-    /** Window thumbnails by id (or an error string when one could not be taken). */
+    /**
+     * Window thumbnails by id (or an error string when one could not be
+     * taken). Unused since the window grid was deleted in favour of the
+     * focused-window canvas — kept because it is protocol surface the bridge
+     * still answers, not dead code to delete on sight.
+     */
     private val _thumbs = MutableStateFlow<Map<Long, Bitmap>>(emptyMap())
     val thumbs: StateFlow<Map<Long, Bitmap>> = _thumbs.asStateFlow()
 
