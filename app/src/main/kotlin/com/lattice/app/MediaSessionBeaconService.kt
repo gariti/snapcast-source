@@ -258,7 +258,10 @@ class MediaSessionBeaconService : LifecycleService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val notif: Notification = NotificationCompat.Builder(this, AudioCaptureService.CHANNEL_ID)
-            .setContentTitle("Lattice")
+            // The persistent pill is the app's front door — it is how you get to
+            // the desktop when it is locked (MainActivity raises the fingerprint
+            // on entry), so it is labelled as the action, not as a status.
+            .setContentTitle("Control Lattice")
             .setContentText("Linked to the desktop")
             .setSmallIcon(R.drawable.ic_stat_lattice)
             .setContentIntent(contentPi)

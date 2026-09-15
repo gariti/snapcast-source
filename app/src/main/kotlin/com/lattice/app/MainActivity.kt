@@ -17,13 +17,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.app.ActivityCompat
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val PREFS_NAME = Prefs.FILE
 private const val KEY_SLOT = "slot_index"
@@ -50,6 +55,11 @@ class MainActivity : ComponentActivity() {
     private var pendingHost: String = ""
     private var pendingPort: Int = SLOT_PORTS[0]
     private var pendingMode: String = "party"
+
+    /** Lives between onResume and onPause; see [armUnlockPrompt]. */
+    private var unlockWatch: Job? = null
+    /** The last unlock challenge this activity raised the prompt for. */
+    private var lastAutoPrompted: String? = null
 
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -142,6 +152,42 @@ class MainActivity : ComponentActivity() {
         val host = prefs.getString(KEY_HOST, "") ?: ""
         if (host.isNotBlank() && MediaSessionListener.isAccessGranted(this)) {
             MediaSessionBeaconService.start(this)
+        }
+        armUnlockPrompt()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        unlockWatch?.cancel()
+        unlockWatch = null
+    }
+
+    /**
+     * The desktop's lock screen no longer buzzes the phone (see
+     * [DesktopAuth.dispatch]); opening the app is the gesture instead. If the
+     * desktop is locked, hand straight over to the fingerprint.
+     *
+     * The window exists because of a cold start: the control channel belongs to
+     * MediaSessionBeaconService and the `authq` usually lands a second or two
+     * after the UI does, so a one-shot read at onResume would miss it. Watching
+     * rather than polling also means an unlock that starts while you are already
+     * looking at the app is picked up.
+     *
+     * [lastAutoPrompted] is what stops a loop: backing out of the prompt returns
+     * here, onResume runs again, and the challenge is still open — but it is the
+     * same id, so it is not raised a second time. A fresh one (the desktop
+     * re-arms roughly once a minute) is a different id and does count.
+     */
+    private fun armUnlockPrompt() {
+        unlockWatch?.cancel()
+        unlockWatch = lifecycleScope.launch {
+            val c = withTimeoutOrNull(UNLOCK_WATCH_MS) {
+                DesktopAuth.pending
+                    .map { DesktopAuth.openUnlock() }
+                    .firstOrNull { it != null && it.id != lastAutoPrompted }
+            } ?: return@launch
+            lastAutoPrompted = c.id
+            startActivity(AuthPromptActivity.intent(this@MainActivity, c.id))
         }
     }
 
@@ -240,6 +286,10 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val DEFAULT_VRFY_PORT = 4905
+
+        /** How long after opening the app an `unlock` challenge still counts as
+         *  "you opened the app to unlock the desktop". */
+        private const val UNLOCK_WATCH_MS = 20_000L
 
         private val pairScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

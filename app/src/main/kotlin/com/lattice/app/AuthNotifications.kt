@@ -18,7 +18,13 @@ import androidx.core.app.NotificationCompat
  * does not fire the delete intent, so a withdrawn challenge is not "denied").
  *
  * Its own channel, IMPORTANCE_HIGH: the beacon's channel is deliberately LOW
- * (a silent "linked" pill), and a request to unlock the desktop has to buzz.
+ * (a silent "Control Lattice" pill), and a request you just made at the desktop
+ * has to buzz.
+ *
+ * NOT used for `unlock`. The lock screen re-arms its fingerprint helper for as
+ * long as the desktop is locked, so notifying it would buzz once a minute
+ * unprompted; that one is pulled instead, by opening the app
+ * (`MainActivity.armUnlockPrompt`). See DesktopAuth.dispatch.
  */
 object AuthNotifications {
     const val CHANNEL_ID = "desktop_auth"
@@ -31,7 +37,7 @@ object AuthNotifications {
         if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
             mgr.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "Desktop requests", NotificationManager.IMPORTANCE_HIGH).apply {
-                    description = "The desktop asks for your fingerprint: sudo, permissions, unlock."
+                    description = "The desktop asks for your fingerprint: sudo, permissions."
                     setShowBadge(false)
                     lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 }

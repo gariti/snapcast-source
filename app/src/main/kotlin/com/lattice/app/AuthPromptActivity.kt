@@ -41,8 +41,12 @@ import kotlinx.coroutines.delay
  * is often asking exactly when the phone is on the nightstand), never in
  * recents, and closes itself when the challenge is cancelled or expires.
  *
- * The BiometricPrompt opens the moment the screen does — one tap on the
- * notification is the whole gesture. Its CryptoObject is the key's Signature;
+ * Reached two ways: a tap on the challenge notification (sudo, polkit), or
+ * MainActivity handing over on entry when the desktop is sitting locked — that
+ * kind is never notified, so opening the app is the gesture.
+ *
+ * The BiometricPrompt opens the moment the screen does — one tap is the whole
+ * gesture. Its CryptoObject is the key's Signature;
  * the unlocked Signature signs the challenge payload → `authr`. The signature
  * can only exist if the prompt succeeded; there is no code path that signs
  * without it. Backing out of the prompt lands on the details with Approve /

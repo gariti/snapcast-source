@@ -31,6 +31,12 @@ import java.nio.ByteBuffer
 object DesktopAuth {
     private const val TAG = "DesktopAuth"
 
+    /**
+     * The lock screen's kind. It is the one kind that is NOT notified: see
+     * [dispatch]. Everything else (sudo, polkit, test) still buzzes.
+     */
+    const val KIND_UNLOCK = "unlock"
+
     data class Challenge(
         val id: String,
         val host: String,
@@ -116,7 +122,15 @@ object DesktopAuth {
                 }
                 _pending.value = _pending.value + (c.id to c)
                 Log.i(TAG, "challenge ${c.id}: ${c.kind} / ${c.action}")
-                AuthNotifications.show(context, c)
+                // `unlock` is not news. The desktop's lock screen stands a
+                // fingerprint helper for as long as it is locked and re-arms it
+                // every time a challenge times out, so notifying would buzz the
+                // phone roughly once a minute for a question nobody asked. The
+                // unlock path is therefore PULL: the challenge sits here in
+                // `pending` and MainActivity raises the prompt when you open the
+                // app. Every other kind is a live request from something you
+                // just did at the desktop, and still buzzes.
+                if (c.kind != KIND_UNLOCK) AuthNotifications.show(context, c)
             }
             "authc" -> {
                 val id = msg["id"] as? String ?: return
@@ -144,6 +158,14 @@ object DesktopAuth {
     }
 
     // ---- what the UI calls ----------------------------------------------------
+
+    /**
+     * The open `unlock` challenge, if the desktop is sitting on its lock screen
+     * right now. Live ones only — a challenge whose clock has run out is still
+     * in the map until the desktop's `authc` arrives.
+     */
+    fun openUnlock(): Challenge? =
+        _pending.value.values.firstOrNull { it.kind == KIND_UNLOCK && it.remaining > 0 }
 
     /** The bytes the desktop verifies. Mirrors `challenge_payload` in auth.rs. */
     fun payload(c: Challenge): ByteArray {
