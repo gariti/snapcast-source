@@ -46,6 +46,8 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
@@ -120,6 +122,10 @@ fun TerminalView(
 
     Box(
         modifier
+            // The surface's own handle: TalkBack announces what this is, and
+            // it is what the on-device gesture test aims a pinch at (the
+            // mirror has one already, as the Image's contentDescription).
+            .semantics { contentDescription = "agent terminal" }
             .clip(RoundedCornerShape(6.dp))
             .background(Vt.DEFAULT_BG)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))

@@ -14,6 +14,10 @@ android {
         targetSdk = 35
         versionCode = 10
         versionName = "1.0.0"
+        // The gesture tests are the only way to put TWO fingers on this app:
+        // a stock Pixel refuses `sendevent` to /dev/input/* from adb, and
+        // `adb shell input` has never spoken multi-touch.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     // Two distribution flavors, IDENTICAL for the custom link (control channel
@@ -66,6 +70,7 @@ android {
     sourceSets["main"].java.srcDirs("src/main/kotlin")
     sourceSets["foss"].java.srcDirs("src/foss/kotlin")
     sourceSets["play"].java.srcDirs("src/play/kotlin")
+    sourceSets["androidTest"].java.srcDirs("src/androidTest/kotlin")
 }
 
 dependencies {
@@ -83,4 +88,8 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.jtransforms)
+
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.uiautomator)
 }

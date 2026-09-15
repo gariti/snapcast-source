@@ -38,6 +38,8 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -396,6 +398,10 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean, onZoom: (Float) -> Unit = {
             .clip(RoundedCornerShape(6.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))
+            // The surface's handle, on the frame rather than the picture: it
+            // has to exist before the first frame arrives, or "waiting for a
+            // frame" and "not mirroring at all" look identical from outside.
+            .semantics { contentDescription = "desktop mirror" }
             .onSizeChanged {
                 widthPx = it.width.toFloat().coerceAtLeast(1f)
                 heightPx = it.height.toFloat().coerceAtLeast(1f)
@@ -423,7 +429,7 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean, onZoom: (Float) -> Unit = {
     ) {
         if (bmp != null) {
             Image(
-                bmp.asImageBitmap(), contentDescription = "desktop mirror",
+                bmp.asImageBitmap(), contentDescription = null,
                 modifier = Modifier.fillMaxSize().graphicsLayer {
                     // Origin top-left so the magnification is plain arithmetic
                     // at the tap end: content = (touch − pan) / scale.
