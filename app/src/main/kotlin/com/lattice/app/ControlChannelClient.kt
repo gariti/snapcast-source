@@ -2,6 +2,7 @@ package com.lattice.app
 
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -110,7 +111,15 @@ class ControlChannelClient(
     private var lastNp: List<Any?>? = null
 
     /** Last resolved artwork, keyed by the URI it came from. */
-    private var artCache: Pair<String, ArtLoader.Art?>? = null
+    private var artCache: ArtCacheEntry? = null
+
+    /**
+     * One [resolveArt] result. A FAILURE is remembered too — re-reading a
+     * provider that just refused us on every now-playing tick would be the
+     * stall the cache exists to prevent — but only until [ART_RETRY_MS], so a
+     * transient miss cannot disable cover art for the life of the process.
+     */
+    private class ArtCacheEntry(val uri: String, val art: ArtLoader.Art?, val atMs: Long)
 
     /** Art keys already shipped on THIS connection; cleared on disconnect. */
     private val sentArtKeys = mutableSetOf<String>()
@@ -192,9 +201,19 @@ class ControlChannelClient(
      */
     private fun resolveArt(uri: String): ArtLoader.Art? {
         if (!ArtLoader.isLocal(uri)) return null
-        artCache?.let { (cachedUri, cachedArt) -> if (cachedUri == uri) return cachedArt }
+        val now = SystemClock.elapsedRealtime()
+        artCache?.let { hit ->
+            // A hit is good forever; a miss only until the retry window closes.
+            // Podcast Addict writes its artwork cache asynchronously, so the
+            // first read of a URI for a freshly-opened episode can legitimately
+            // fail microseconds before the file appears.
+            if (hit.uri == uri && (hit.art != null || now - hit.atMs < ART_RETRY_MS)) {
+                return hit.art
+            }
+        }
         val art = ArtLoader.load(appContext, uri)
-        artCache = uri to art
+        if (art == null) Log.w(TAG, "no artwork for $uri (retrying in ${ART_RETRY_MS}ms)")
+        artCache = ArtCacheEntry(uri, art, now)
         return art
     }
 
@@ -639,6 +658,14 @@ class ControlChannelClient(
 
         /** Ceiling on chunks per cover; ART_CHUNK * this bounds the transfer. */
         private const val ART_MAX_CHUNKS = 512
+
+        /**
+         * How long a FAILED art load is trusted before we read the provider
+         * again. Long enough that a stubborn URI costs one read per interval
+         * rather than one per now-playing tick; short enough that a cover that
+         * appears a moment after playback starts still reaches the desktop.
+         */
+        private const val ART_RETRY_MS = 15_000L
 
         // Mirror CommandUdpListener's capture-gating opcodes.
         private const val CMD_PAUSE_CAPTURE = 7

@@ -50,8 +50,18 @@ object ArtLoader {
     fun load(context: Context, uri: String): Art? {
         if (!isLocal(uri)) return null
         return try {
-            val raw = readAll(context, uri) ?: return null
-            val jpeg = normalize(raw) ?: return null
+            val raw = readAll(context, uri)
+            if (raw == null) {
+                // Distinct from the throw below: the provider answered, it just
+                // had nothing for us (entry evicted, or not written yet).
+                Log.w(TAG, "art unreadable (empty or oversized) at $uri")
+                return null
+            }
+            val jpeg = normalize(raw)
+            if (jpeg == null) {
+                Log.w(TAG, "art at $uri is not a decodable image (${raw.size}B)")
+                return null
+            }
             Art(sha256Hex(jpeg).take(KEY_LEN), jpeg)
         } catch (e: Exception) {
             // A provider we lack permission for, a revoked URI, a deleted cache
