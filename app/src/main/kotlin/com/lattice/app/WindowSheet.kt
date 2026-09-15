@@ -32,6 +32,8 @@ fun WindowSheetContent(
     prefs: CanvasPrefs,
     agentSession: String?,
     termMode: Boolean,
+    webPage: WebPage?,
+    webMode: Boolean,
     enabled: Boolean,
     onDone: () -> Unit,
 ) {
@@ -67,6 +69,13 @@ fun WindowSheetContent(
             if (agentSession != null && !prefs.wholeOutput) {
                 FilterChip(selected = termMode, onClick = { prefs.mirrorFor = null }, label = { Text("terminal") })
                 FilterChip(selected = !termMode, onClick = { prefs.mirrorFor = agentSession }, label = { Text("mirror") })
+            } else if (webPage != null && !prefs.wholeOutput) {
+                // Same pair as the terminal's, for the same reason: the page
+                // renders here, but the picture is the desktop's own
+                // authenticated screen and stays one tap away — which matters
+                // most for exactly the sites the phone is logged out of.
+                FilterChip(selected = webMode, onClick = { prefs.mirrorForWeb = null }, label = { Text("web") })
+                FilterChip(selected = !webMode, onClick = { prefs.mirrorForWeb = webPage.url }, label = { Text("mirror") })
             } else {
                 FilterChip(
                     selected = !prefs.wholeOutput,

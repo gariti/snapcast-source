@@ -60,6 +60,8 @@ class CanvasPrefs {
     var mirrorOn by mutableStateOf(true)
     /** An agent session the user asked to see as a picture instead of text. */
     var mirrorFor by mutableStateOf<String?>(null)
+    /** A web page the user asked to see as a picture instead of a real page. */
+    var mirrorForWeb by mutableStateOf<String?>(null)
 }
 
 /**
@@ -94,6 +96,17 @@ fun LatticeApp(app: AppState) {
         ?.removePrefix(AGENT_APP_PREFIX)
         ?.takeIf { it.isNotEmpty() }
     val termMode = agentSession != null && !prefs.wholeOutput && prefs.mirrorFor != agentSession
+
+    // And a browser window is a page: render it here instead of watching a
+    // JPEG of it. Same shape as the terminal and computed in the same place,
+    // for the same reason — the title strip and the window sheet both have to
+    // agree with the canvas about what is on screen.
+    //
+    // The two are disjoint by construction: an agent terminal is a `foot`
+    // window and a web page is a browser one, so `termMode` wins any tie
+    // without either having to know about the other.
+    val webPage = if (termMode) null else webPageFor(focused)
+    val webMode = webPage != null && !prefs.wholeOutput && prefs.mirrorForWeb != webPage.url
 
     // Dictation outcomes surface wherever you are.
     LaunchedEffect(dict) {
@@ -142,6 +155,7 @@ fun LatticeApp(app: AppState) {
                         wholeOutput = prefs.wholeOutput,
                         outputName = prefs.output,
                         termMode = termMode,
+                        webMode = webMode,
                         linked = ready,
                         onClick = { sheet = Sheet.Window },
                     )
@@ -151,6 +165,8 @@ fun LatticeApp(app: AppState) {
                         ready = ready,
                         agentSession = agentSession,
                         termMode = termMode,
+                        webPage = webPage,
+                        webMode = webMode,
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
                 }
@@ -162,6 +178,8 @@ fun LatticeApp(app: AppState) {
                             prefs = prefs,
                             agentSession = agentSession,
                             termMode = termMode,
+                            webPage = webPage,
+                            webMode = webMode,
                             enabled = client?.sessionReady == true,
                             onDone = { Link.requestDesk() },
                         )
@@ -200,6 +218,7 @@ private fun TitleStrip(
     wholeOutput: Boolean,
     outputName: String?,
     termMode: Boolean,
+    webMode: Boolean,
     linked: Boolean,
     onClick: () -> Unit,
 ) {
@@ -211,6 +230,13 @@ private fun TitleStrip(
     val secondary = when {
         wholeOutput -> "every window on this output"
         focused == null -> if (linked) "focus something on the desktop" else "not linked"
+        // A Chromium app-mode app-id is the URL with its punctuation mangled
+        // (`chrome-claude.ai__artifact_BGVn…-Default`) — 50-odd characters
+        // that say nothing the address bar right below is not already saying
+        // properly, and long enough to push the mode label off the end of the
+        // line. In web mode the app-id is noise; everywhere else it is the
+        // thing that tells three agent terminals apart.
+        webMode -> "web"
         else -> buildString {
             append(focused.app.ifBlank { "?" })
             if (termMode) append(" · terminal")

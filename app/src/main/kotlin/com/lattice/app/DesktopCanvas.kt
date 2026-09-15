@@ -68,6 +68,8 @@ fun DesktopCanvas(
     ready: Boolean,
     agentSession: String?,
     termMode: Boolean,
+    webPage: WebPage?,
+    webMode: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val fps = app.mirrorFps
@@ -181,8 +183,8 @@ fun DesktopCanvas(
         ((want + 255) / 256 * 256).coerceIn(baseWidth, 1920)
     }
 
-    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode, mirrorWidth) {
-        if (live && !termMode && fallback != null) {
+    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode, webMode, mirrorWidth) {
+        if (live && !termMode && !webMode && fallback != null) {
             Link.mirror(on = true, focused = !wholeOutput, output = fallback.name, fps = fps, width = mirrorWidth)
         } else {
             Link.mirror(on = false)
@@ -192,8 +194,8 @@ fun DesktopCanvas(
     // Watchdog: an "on" can get lost in a link or bridge restart, and a
     // bridge that restarts forgets what it was showing. Whenever the mirror
     // should be live and no frame has arrived for 3 s, ask again.
-    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode, mirrorWidth) {
-        while (live && !termMode && fallback != null) {
+    LaunchedEffect(fallback?.name, wholeOutput, live, fps, termMode, webMode, mirrorWidth) {
+        while (live && !termMode && !webMode && fallback != null) {
             kotlinx.coroutines.delay(2500)
             val now = System.currentTimeMillis()
             val last = Link.lastFrameAt
@@ -214,7 +216,11 @@ fun DesktopCanvas(
     // sheet behind the title strip. The canvas is the picture and nothing else.
     Column(modifier) {
         if (!ready) NoticeCard("Desktop not reachable", "The mirror needs the desktop's bridge. Check Settings for the link state.", Modifier.padding(16.dp))
-        val surfaceError = if (termMode) termError?.let { "Terminal: $it" } else mirrorError?.let { "Mirror: $it" }
+        val surfaceError = when {
+            termMode -> termError?.let { "Terminal: $it" }
+            webMode -> null
+            else -> mirrorError?.let { "Mirror: $it" }
+        }
         surfaceError?.let { Text(it, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
 
         val pausedWhy = when {
@@ -240,7 +246,17 @@ fun DesktopCanvas(
             Modifier.weight(1f).fillMaxWidth().systemGestureExclusion(),
             contentAlignment = Alignment.Center,
         ) {
-            if (termMode) {
+            if (webMode && webPage != null) {
+                // The page, rendered here. No mirror is running behind it —
+                // there would be nothing to look at, and not running it is
+                // the whole saving.
+                WebSurface(
+                    url = webPage.url,
+                    enabled = ready && foreground,
+                    onOpenOnDesktop = { u -> Link.act("Spawn", "command" to org.json.JSONArray(listOf("xdg-open", u))) },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else if (termMode) {
                 TerminalView(
                     screen = termScreen,
                     enabled = ready && termLive,

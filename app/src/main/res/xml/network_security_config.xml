@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Web mode renders the desktop's page on the phone, and the pages this desktop
+  serves are plain http:// — both sites in the control panel's website registry
+  are (`dashboard.websites` in shell.json, checked 2026-09-14).
+
+  Android has blocked cleartext by default since API 28, and a WebView that
+  hits that block shows a BLANK PAGE with nothing in the UI to explain it, so
+  without this file web mode looks broken rather than blocked.
+
+  Scoped to this network on purpose. A blanket `usesCleartextTraffic="true"`
+  would turn the block off for every host the app ever talks to, including the
+  slink control channel's fallbacks; these entries turn it off for the machines
+  that are on the other end of the desktop link and nothing else.
+
+  `includeSubdomains` on the tailnet suffix covers every node's MagicDNS name
+  without listing them, and the LAN literals cover the same hosts by address
+  when the phone is on the same wifi rather than over the tailnet.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Tailnet MagicDNS: home-services, nixos-1, bazzite, … -->
+        <domain includeSubdomains="true">tailb7f992.ts.net</domain>
+        <!-- The same hosts by their short names, which is how the registry
+             spells them (http://home-services:3000/). -->
+        <domain includeSubdomains="false">home-services</domain>
+        <domain includeSubdomains="false">nixos-1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <!-- and by LAN address, which is how the registry spells the other
+             one (http://192.168.0.117:8400/). -->
+        <domain includeSubdomains="false">192.168.0.117</domain>
+        <domain includeSubdomains="false">192.168.0.71</domain>
+    </domain-config>
+</network-security-config>
