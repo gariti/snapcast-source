@@ -71,6 +71,7 @@ fun WebSurface(
     url: String,
     enabled: Boolean,
     onOpenOnDesktop: (String) -> Unit,
+    onTitle: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val ctx = LocalContext.current
@@ -105,6 +106,11 @@ fun WebSurface(
                 }
                 override fun onPageFinished(v: WebView, u: String) {
                     current = u; loading = false; canBack = v.canGoBack()
+                    // The page's own name, for the title strip. The desktop
+                    // window's title is no use for a kiosk — it is the
+                    // `dashboard-web · <url>` marker this surface parses the
+                    // address out of, which would just repeat the bar below.
+                    onTitle(v.title?.takeIf { it.isNotBlank() && it != u })
                 }
                 override fun onReceivedError(v: WebView, r: WebResourceRequest, e: WebResourceError) {
                     // Subresources fail constantly and say nothing useful;
@@ -135,6 +141,7 @@ fun WebSurface(
     LaunchedEffect(enabled) { if (enabled) web.onResume() else web.onPause() }
     DisposableEffect(web) {
         onDispose {
+            onTitle(null)
             web.stopLoading()
             web.destroy()
         }

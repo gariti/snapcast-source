@@ -107,6 +107,11 @@ fun LatticeApp(app: AppState) {
     // without either having to know about the other.
     val webPage = if (termMode) null else webPageFor(focused)
     val webMode = webPage != null && !prefs.wholeOutput && prefs.mirrorForWeb != webPage.url
+    // The page's own name, reported up by the WebView once it has loaded.
+    // The desktop window's title is the wrong thing to show for a kiosk: it
+    // is the `dashboard-web · <url>` marker the address was parsed out of,
+    // so it would just repeat the address bar back at you.
+    var webTitle by remember { mutableStateOf<String?>(null) }
 
     // Dictation outcomes surface wherever you are.
     LaunchedEffect(dict) {
@@ -156,6 +161,7 @@ fun LatticeApp(app: AppState) {
                         outputName = prefs.output,
                         termMode = termMode,
                         webMode = webMode,
+                        webTitle = webTitle,
                         linked = ready,
                         onClick = { sheet = Sheet.Window },
                     )
@@ -167,6 +173,7 @@ fun LatticeApp(app: AppState) {
                         termMode = termMode,
                         webPage = webPage,
                         webMode = webMode,
+                        onWebTitle = { webTitle = it },
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
                 }
@@ -219,12 +226,16 @@ private fun TitleStrip(
     outputName: String?,
     termMode: Boolean,
     webMode: Boolean,
+    webTitle: String?,
     linked: Boolean,
     onClick: () -> Unit,
 ) {
     val primary = when {
         wholeOutput -> outputName ?: "whole output"
         focused == null -> "no focused window"
+        // In web mode the page names itself; fall back to the window's title
+        // only until the first load finishes.
+        webMode && webTitle != null -> webTitle
         else -> focused.title.ifBlank { focused.app.ifBlank { "untitled" } }
     }
     val secondary = when {

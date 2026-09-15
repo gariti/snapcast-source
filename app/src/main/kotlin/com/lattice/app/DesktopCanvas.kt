@@ -70,6 +70,7 @@ fun DesktopCanvas(
     termMode: Boolean,
     webPage: WebPage?,
     webMode: Boolean,
+    onWebTitle: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val fps = app.mirrorFps
@@ -254,6 +255,7 @@ fun DesktopCanvas(
                     url = webPage.url,
                     enabled = ready && foreground,
                     onOpenOnDesktop = { u -> Link.act("Spawn", "command" to org.json.JSONArray(listOf("xdg-open", u))) },
+                    onTitle = onWebTitle,
                     modifier = Modifier.fillMaxSize(),
                 )
             } else if (termMode) {
