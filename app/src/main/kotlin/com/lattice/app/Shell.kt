@@ -9,7 +9,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -190,6 +195,7 @@ fun LatticeApp(app: AppState) {
                     agentSession = agentSession, termMode = termMode, webPage = webPage, webMode = webMode,
                     webTitle = webTitle, onWebTitle = { webTitle = it },
                     sheet = sheet, onSheet = { s -> sheet = if (sheet == s) null else s; if (s != Sheet.More) morePage = null },
+                    onCollapse = { sheet = null; morePage = null },
                     shrunk = shrunk, notice = notice,
                     modifier = if (shrunk) Modifier else Modifier.weight(1f),
                 )
@@ -244,6 +250,7 @@ private fun CanvasCard(
     onWebTitle: (String?) -> Unit,
     sheet: Sheet?,
     onSheet: (Sheet) -> Unit,
+    onCollapse: () -> Unit,
     shrunk: Boolean,
     notice: Pair<String, StatusTone>?,
     modifier: Modifier = Modifier,
@@ -298,7 +305,13 @@ private fun CanvasCard(
         modifier = modifier,
         active = !shrunk,
         top = {
-            Column(Modifier.weight(1f)) {
+            // The window's name is the way in to everything about it.
+            Column(
+                Modifier.weight(1f)
+                    .clip(RoundedCornerShape(lx.radiusRow))
+                    .clickable(role = Role.Button, onClickLabel = stringResource(R.string.window)) { if (shrunk) onCollapse() else onSheet(Sheet.Window) }
+                    .padding(horizontal = lx.u(0.3f), vertical = lx.u(0.2f)),
+            ) {
                 LxWordmark(title)
                 LxCaption(caption)
             }
@@ -313,7 +326,8 @@ private fun CanvasCard(
             // of the composition to show something else — its effects run the
             // mirror and the terminal, and a sheet draws under it, not instead.
             val surfaceModifier = when {
-                shrunk -> Modifier.fillMaxWidth().height(lx.u(3.2f))
+                // Shrunk under a sheet: a tap on the sliver brings the window back.
+                shrunk -> Modifier.fillMaxWidth().height(lx.u(3.2f)).clickable(role = Role.Button, onClickLabel = stringResource(R.string.hint_back_to_window)) { onCollapse() }
                 termMode || webMode -> Modifier.fillMaxWidth().weight(1f)
                 else -> Modifier.fillMaxWidth().heightIn(max = lx.u(22f))
             }
