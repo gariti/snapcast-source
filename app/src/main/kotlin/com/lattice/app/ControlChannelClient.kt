@@ -639,6 +639,8 @@ class ControlChannelClient(
             "term",
             // Desktop auth: authq/authc in, authr/authe out (DesktopAuth).
             "auth",
+            // Agent requests: notify in, notifya out (AgentNotifications).
+            "notify",
         )
 
         /**

@@ -120,6 +120,8 @@ class MediaSessionBeaconService : LifecycleService() {
                 Link.attach(it, lifecycleScope)
                 // Desktop auth challenges ride the same link.
                 DesktopAuth.attach(this, it, lifecycleScope)
+                // So do agents asking for the human (desktop `phone-notify`).
+                AgentNotifications.attach(this, it, lifecycleScope)
                 AudioRouteMonitor.attach(this, it, lifecycleScope)
             }
         }
