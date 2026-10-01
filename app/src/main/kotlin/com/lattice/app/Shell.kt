@@ -360,7 +360,9 @@ private fun CanvasCard(
                 )
             }
         } else null,
-        bottom = {
+        // Shrunk under a sheet, the card is its band and a sliver of picture: no bottom band.
+        bottom = if (shrunk) null else {
+            {
             LxButton("?", contentDescription = stringResource(R.string.gestures), pressed = sheet == Sheet.Gestures) { onSheet(Sheet.Gestures) }
             LxHints(if (closeArm.armed) listOf(Hint(stringResource(R.string.hint_tap), stringResource(R.string.tap_again_to_close))) else hints)
             LxButton(
@@ -368,6 +370,7 @@ private fun CanvasCard(
                 enabled = ready && focused != null, armed = closeArm.armed,
             ) {
                 if (closeArm.press()) focused?.let { Link.act("CloseWindow", "id" to it.id) }
+            }
             }
         },
     )

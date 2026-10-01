@@ -611,7 +611,7 @@ fun LxField(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(lx.u(0.6f)),
     ) {
-        LxText(label, Type.caption, if (focused) r.accent else lx.ink(Alpha.caption), Modifier.width(lx.u(3.5f)), maxLines = 1, uppercase = true)
+        LxText(label, Type.caption, if (focused) r.accent else lx.ink(Alpha.caption), Modifier.width(lx.u(4.6f)), maxLines = 1, uppercase = true)
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
