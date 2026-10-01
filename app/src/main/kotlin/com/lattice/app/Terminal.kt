@@ -18,8 +18,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,6 +54,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.lattice.app.lx.LxPill
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -132,12 +132,10 @@ fun TerminalView(
             .onSizeChanged { widthPx = it.width; heightPx = it.height },
     ) {
         if (screen == null) {
-            Text(
-                waiting ?: if (enabled) "opening the session…" else "terminal off",
-                Modifier.align(Alignment.Center).padding(16.dp),
-                color = MaterialTheme.colorScheme.outline,
-                style = MaterialTheme.typography.labelMedium,
-                textAlign = TextAlign.Center,
+            com.lattice.app.lx.LxText(
+                waiting ?: if (enabled) androidx.compose.ui.res.stringResource(R.string.opening_session) else androidx.compose.ui.res.stringResource(R.string.paused),
+                com.lattice.app.lx.Type.caption, com.lattice.app.lx.LxTheme.current.ink(0.45f),
+                Modifier.align(Alignment.Center).padding(16.dp), align = TextAlign.Center,
             )
             return@Box
         }
@@ -242,15 +240,9 @@ fun TerminalView(
         }
 
         if (screen.off > 0) {
-            Text(
-                "↑ ${screen.off} back · ${screen.hist} held · tap to follow",
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(6.dp)
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+            LxPill(
+                androidx.compose.ui.res.stringResource(R.string.lines_back, screen.off),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(6.dp),
             )
         }
     }
@@ -341,119 +333,56 @@ private fun Modifier.terminalGestures(
 }
 
 /**
- * The keys a phone keyboard cannot reach, plus the one that raises it.
- *
- * `ctrl` is a latch rather than a chord: tap it, then tap a letter. Holding two
- * keys at once is not something a touchscreen does well, and every control byte
- * a TUI wants is ctrl-plus-one-letter anyway.
+ * The keys a phone keyboard cannot reach, as two strips of thumb-sized caps
+ * between the tile and the bottom band — ONE component with the Keys card
+ * (`LxKey`), one arrow order. `ctrl` is a latch: tap it, then a letter. `^C`
+ * can kill an agent, so it ARMS on the first tap and fires on the second.
+ * The keyboard cap is the only thing that raises the phone's keyboard.
  */
 @Composable
-fun TerminalKeys(
+fun TerminalKeyStrips(
     enabled: Boolean,
     onInput: (ByteArray) -> Unit,
+    keyboardOpen: Boolean,
+    onKeyboard: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val lx = com.lattice.app.lx.LxTheme.current
     var ctrl by remember { mutableStateOf(false) }
-    var keyboardUp by remember { mutableStateOf(false) }
-    val focus = remember { FocusRequester() }
-
-    Column(modifier) {
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TermKey("esc", enabled) { onInput(Vt.ESC) }
-            TermKey("⇥", enabled) { onInput(Vt.TAB) }
-            TermKey("⇧⇥", enabled) { onInput(Vt.SHIFT_TAB) }
-            TermKey("↑", enabled) { onInput(Vt.UP) }
-            TermKey("↓", enabled) { onInput(Vt.DOWN) }
-            TermKey("←", enabled) { onInput(Vt.LEFT) }
-            TermKey("→", enabled) { onInput(Vt.RIGHT) }
-            TermKey("⌫", enabled) { onInput(Vt.BACKSPACE) }
-            TermKey("⏎", enabled) { onInput(Vt.ENTER) }
-            TermKey("^C", enabled) { onInput(Vt.ctrl('c')) }
-            FilterChip(
-                selected = ctrl,
-                onClick = { ctrl = !ctrl },
-                enabled = enabled,
-                label = { Text("ctrl", fontFamily = FontFamily.Monospace) },
-            )
-            FilterChip(
-                selected = keyboardUp,
-                onClick = { keyboardUp = !keyboardUp },
-                enabled = enabled,
-                label = { Text("abc", fontFamily = FontFamily.Monospace) },
-            )
+    val intArm = com.lattice.app.lx.rememberArm()
+    val k = 1.55f
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(lx.u(0.4f))) {
+        com.lattice.app.lx.LxKeyStrip {
+            com.lattice.app.lx.LxKey("esc", k, enabled = enabled) { onInput(Vt.ESC) }
+            com.lattice.app.lx.LxKey("⇥", k, enabled = enabled, contentDescription = "tab") { onInput(Vt.TAB) }
+            com.lattice.app.lx.LxKey("⇧⇥", k, enabled = enabled, contentDescription = "shift tab") { onInput(Vt.SHIFT_TAB) }
+            com.lattice.app.lx.LxKey("⌫", k, enabled = enabled, contentDescription = "backspace") { onInput(Vt.BACKSPACE) }
+            com.lattice.app.lx.LxKey("⏎", k, enabled = enabled, contentDescription = "enter") { onInput(Vt.ENTER) }
+            com.lattice.app.lx.LxKey("^C", k, enabled = enabled, warn = true, on = intArm.armed, contentDescription = "interrupt") {
+                if (intArm.press()) onInput(Vt.ctrl('c'))
+            }
         }
-
-        // The IME sink. It holds no text of its own: each keystroke goes down
-        // the wire the moment it arrives and the session's own echo is the
-        // feedback. That is what makes an arrow-key menu or a y/n prompt work
-        // from a phone at all.
-        if (keyboardUp) {
-            var pending by remember { mutableStateOf("") }
-            LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-            BasicTextField(
-                value = pending,
-                onValueChange = { typed ->
-                    if (typed.isEmpty()) return@BasicTextField
-                    if (ctrl && typed.length == 1) {
-                        onInput(Vt.ctrl(typed[0]))
-                        ctrl = false
-                    } else {
-                        onInput(typed.toByteArray())
-                    }
-                    // Held at empty so the next keystroke is a fresh change.
-                    pending = ""
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
-                    .focusRequester(focus)
-                    .onPreviewKeyEvent { e ->
-                        // A field held empty never reports backspace as a text
-                        // change, so take it as a key instead.
-                        if (e.type == KeyEventType.KeyDown && e.key == Key.Backspace) {
-                            onInput(Vt.BACKSPACE); true
-                        } else false
+        com.lattice.app.lx.LxKeyStrip {
+            com.lattice.app.lx.LxKey("←", k, enabled = enabled, contentDescription = "left") { onInput(Vt.LEFT) }
+            com.lattice.app.lx.LxKey("↓", k, enabled = enabled, contentDescription = "down") { onInput(Vt.DOWN) }
+            com.lattice.app.lx.LxKey("↑", k, enabled = enabled, contentDescription = "up") { onInput(Vt.UP) }
+            com.lattice.app.lx.LxKey("→", k, enabled = enabled, contentDescription = "right") { onInput(Vt.RIGHT) }
+            com.lattice.app.lx.LxKey("ctrl", k, on = ctrl, enabled = enabled) { ctrl = !ctrl }
+            com.lattice.app.lx.LxKey("", k, on = keyboardOpen, enabled = enabled, wide = true,
+                icon = androidx.compose.material.icons.Icons.Filled.Keyboard, contentDescription = "keyboard") { onKeyboard() }
+        }
+        if (keyboardOpen) {
+            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(lx.radiusRow)).background(lx.ink(com.lattice.app.lx.Alpha.fieldBoxFocused))) {
+                ImeSink(
+                    open = keyboardOpen, enabled = enabled,
+                    placeholder = if (ctrl) "ctrl + the next key" else "every key goes straight through",
+                    onText = { typed ->
+                        if (ctrl && typed.length == 1) { onInput(Vt.ctrl(typed[0])); ctrl = false } else onInput(typed.toByteArray())
                     },
-                singleLine = true,
-                // Password stops Gboard composing whole words, which would
-                // otherwise batch a word instead of delivering each key.
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                textStyle = TextStyle(
-                    fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                decorationBox = { inner ->
-                    Box {
-                        if (pending.isEmpty()) {
-                            Text(
-                                if (ctrl) "ctrl + the next key" else "type — every key goes straight through",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.outline,
-                            )
-                        }
-                        inner()
-                    }
-                },
-            )
+                    onBackspace = { onInput(Vt.BACKSPACE) },
+                    onEnter = { onInput(Vt.ENTER) },
+                )
+            }
         }
-    }
-}
-
-@Composable
-private fun TermKey(label: String, enabled: Boolean, onClick: () -> Unit) {
-    FilledTonalButton(
-        onClick = onClick,
-        enabled = enabled,
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-        modifier = Modifier.padding(vertical = 4.dp),
-    ) {
-        Text(label, style = MaterialTheme.typography.labelLarge, fontFamily = FontFamily.Monospace)
     }
 }

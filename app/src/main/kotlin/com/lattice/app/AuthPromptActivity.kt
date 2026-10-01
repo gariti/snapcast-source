@@ -6,19 +6,21 @@ import android.os.Bundle
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.util.Log
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -28,42 +30,53 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import com.lattice.app.lx.Alpha
+import com.lattice.app.lx.ButtonKind
+import com.lattice.app.lx.Hint
+import com.lattice.app.lx.LxButton
+import com.lattice.app.lx.LxCaption
+import com.lattice.app.lx.LxCard
+import com.lattice.app.lx.LxHints
+import com.lattice.app.lx.LxStage
+import com.lattice.app.lx.LxStatus
+import com.lattice.app.lx.LxText
+import com.lattice.app.lx.LxTheme
+import com.lattice.app.lx.LxWordmark
+import com.lattice.app.lx.StatusTone
+import com.lattice.app.lx.Type
+import com.lattice.app.lx.rememberArm
 import kotlinx.coroutines.delay
 
 /**
- * The approval screen for one desktop challenge. A FragmentActivity because
- * BiometricPrompt needs one; deliberately NOT MainActivity so the pairing
- * intent flow there stays untouched. Shows over the lock screen (the desktop
- * is often asking exactly when the phone is on the nightstand), never in
- * recents, and closes itself when the challenge is cancelled or expires.
+ * The approval screen for one desktop challenge: a card. The question in
+ * plain words, the raw action under it in the caption role, the fingerprint,
+ * and two answers — Deny (danger, arms first) in the band and the sensor.
  *
- * Reached two ways: a tap on the challenge notification (sudo, polkit), or
- * MainActivity handing over on entry when the desktop is sitting locked — that
- * kind is never notified, so opening the app is the gesture.
+ * A FragmentActivity because BiometricPrompt needs one; deliberately NOT
+ * MainActivity so the pairing intent flow there stays untouched. Shows over
+ * the lock screen, never in recents, and closes itself when the challenge is
+ * cancelled, expires or is answered elsewhere.
  *
  * The BiometricPrompt opens the moment the screen does — one tap is the whole
- * gesture. Its CryptoObject is the key's Signature;
- * the unlocked Signature signs the challenge payload → `authr`. The signature
- * can only exist if the prompt succeeded; there is no code path that signs
- * without it. Backing out of the prompt lands on the details with Approve /
- * Deny for a second try.
+ * gesture. Its CryptoObject is the key's Signature; the unlocked Signature
+ * signs the challenge payload → `authr`. There is no code path that signs
+ * without it. Backing out of the prompt lands on the card for a second try.
  */
 class AuthPromptActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         val id = intent.getStringExtra(EXTRA_ID) ?: run { finish(); return }
         setContent {
-            LatticeTheme {
-                Surface(Modifier.fillMaxSize()) {
-                    PromptScreen(id)
-                }
+            LxTheme {
+                PromptScreen(id)
             }
         }
     }
@@ -77,15 +90,17 @@ class AuthPromptActivity : FragmentActivity() {
 
     @Composable
     private fun PromptScreen(id: String) {
+        val lx = LxTheme.current
         val pending by DesktopAuth.pending.collectAsState()
         val c = pending[id]
         var error by remember { mutableStateOf<String?>(null) }
         var busy by remember { mutableStateOf(false) }
         var remaining by remember { mutableStateOf(c?.remaining ?: 0L) }
         var autoStarted by remember { mutableStateOf(false) }
+        val denyArm = rememberArm()
 
         // The tap on the notification IS the approve gesture: go straight to
-        // the fingerprint. A cancelled prompt falls back to the buttons below.
+        // the fingerprint. A cancelled prompt falls back to the card.
         LaunchedEffect(c?.id) {
             if (c != null && !autoStarted) {
                 autoStarted = true
@@ -93,11 +108,7 @@ class AuthPromptActivity : FragmentActivity() {
                 approveWithBiometric(c, onError = { error = it; busy = false })
             }
         }
-
-        // Cancelled / expired / answered elsewhere → gone.
-        LaunchedEffect(c) {
-            if (c == null) finish()
-        }
+        LaunchedEffect(c) { if (c == null) finish() }
         LaunchedEffect(id) {
             while (true) {
                 remaining = DesktopAuth.pending.value[id]?.remaining ?: 0L
@@ -107,28 +118,61 @@ class AuthPromptActivity : FragmentActivity() {
         }
         if (c == null) return
 
-        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.Start) {
-                Text(c.title, style = MaterialTheme.typography.headlineSmall)
-                Text(c.action, style = MaterialTheme.typography.bodyLarge, fontFamily = FontFamily.Monospace)
-                if (c.caller.isNotBlank()) Text("from ${c.caller}", style = MaterialTheme.typography.bodyMedium)
-                if (c.message.isNotBlank()) Text(c.message, style = MaterialTheme.typography.bodyMedium)
-                Text("as ${c.user} · expires in ${remaining}s", style = MaterialTheme.typography.labelMedium)
-                error?.takeIf { it.isNotBlank() }?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = { DesktopAuth.deny(this@AuthPromptActivity, id); finish() }, enabled = !busy) {
-                        Text("Deny")
+        val host = Names.host(c.host)
+        val question = when (c.kind) {
+            "unlock" -> stringResource(R.string.unlock_q, host)
+            "sudo" -> stringResource(R.string.sudo_q, host)
+            "test" -> stringResource(R.string.test_q, host)
+            else -> stringResource(R.string.polkit_q, c.message.ifBlank { c.action })
+        }
+
+        LxStage(Modifier.windowInsetsPadding(WindowInsets.statusBars).windowInsetsPadding(WindowInsets.navigationBars)) {
+            LxCard(
+                modifier = Modifier.weight(1f),
+                active = true,
+                top = {
+                    Column(Modifier.weight(1f)) {
+                        LxWordmark(stringResource(R.string.asks, host))
+                        LxCaption(stringResource(R.string.for_fingerprint, remaining))
                     }
-                    Button(
-                        onClick = {
-                            busy = true
-                            error = null
+                },
+                tile = {
+                    Spacer(Modifier.weight(1f))
+                    LxText(question, Type.display)
+                    Spacer(Modifier.size(lx.u(0.8f)))
+                    LxText(
+                        listOfNotNull(
+                            c.action.takeIf { it.isNotBlank() && it != c.message },
+                            if (c.caller.isNotBlank()) stringResource(R.string.asked_by, c.caller, c.user) else stringResource(R.string.for_user, c.user),
+                        ).joinToString("\n"),
+                        Type.caption, lx.ink(Alpha.secondary),
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Column(
+                        Modifier.fillMaxWidth().clickable(enabled = !busy) {
+                            busy = true; error = null
                             approveWithBiometric(c, onError = { error = it; busy = false })
                         },
-                        enabled = !busy,
-                    ) { Text("Approve with fingerprint") }
-                }
-            }
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(lx.u(0.4f)),
+                    ) {
+                        Icon(Icons.Filled.Fingerprint, stringResource(R.string.approve), Modifier.size(lx.u(5.5f)), tint = lx.roles.accent)
+                        LxText(stringResource(R.string.touch_to_approve), Type.caption, lx.ink(Alpha.secondary))
+                    }
+                    Spacer(Modifier.weight(1f))
+                    error?.takeIf { it.isNotBlank() }?.let { LxStatus(it, StatusTone.Error) }
+                },
+                bottom = {
+                    LxButton("?", enabled = false) {}
+                    LxHints(
+                        if (denyArm.armed) listOf(Hint(stringResource(R.string.hint_tap), stringResource(R.string.tap_again_to_deny)))
+                        else listOf(Hint("touch", stringResource(R.string.hint_touch_approves)), Hint("◀", stringResource(R.string.hint_back_leaves)))
+                    )
+                    LxButton(stringResource(R.string.deny), ButtonKind.Danger, armed = denyArm.armed, enabled = !busy) {
+                        if (denyArm.press()) { DesktopAuth.deny(this@AuthPromptActivity, id); finish() }
+                    }
+                },
+            )
         }
     }
 
@@ -137,10 +181,10 @@ class AuthPromptActivity : FragmentActivity() {
             DesktopAuthKey.signer()
         } catch (e: KeyPermanentlyInvalidatedException) {
             DesktopAuth.keyInvalidated(this)
-            onError("a fingerprint was added on the phone — enrol again from Settings")
+            onError(getString(R.string.auth_err_invalidated))
             return
         } catch (e: Exception) {
-            onError("no desktop-auth key: ${e.message}")
+            onError(getString(R.string.auth_err_nokey, e.message ?: ""))
             return
         }
         val payload = DesktopAuth.payload(c)
@@ -151,7 +195,7 @@ class AuthPromptActivity : FragmentActivity() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     val sig = result.cryptoObject?.signature
                     if (sig == null) {
-                        onError("prompt returned no crypto object")
+                        onError(getString(R.string.auth_err_sign, "no crypto object"))
                         return
                     }
                     try {
@@ -161,13 +205,13 @@ class AuthPromptActivity : FragmentActivity() {
                         finish()
                     } catch (e: Exception) {
                         Log.e(TAG, "sign failed", e)
-                        onError("signing failed: ${e.message}")
+                        onError(getString(R.string.auth_err_sign, e.message ?: ""))
                     }
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    // Cancel / back / user pressed the negative button: not a
-                    // deny, just back to the details with the buttons.
+                    // Cancel / back / the negative button: not a deny, just
+                    // back to the card with its two answers.
                     val userBackedOut = errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
                         errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
                         errorCode == BiometricPrompt.ERROR_CANCELED
@@ -183,7 +227,7 @@ class AuthPromptActivity : FragmentActivity() {
             .setTitle(c.title)
             .setSubtitle(c.action)
             .setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG)
-            .setNegativeButtonText("Cancel")
+            .setNegativeButtonText(getString(R.string.cancel))
             .setConfirmationRequired(false)
             .build()
         prompt.authenticate(info, BiometricPrompt.CryptoObject(signer))
@@ -199,3 +243,6 @@ class AuthPromptActivity : FragmentActivity() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }
 }
+
+@Suppress("unused")
+private val keepWeight = FontWeight.Light

@@ -7,15 +7,16 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.app.NotificationCompat
 
 /**
- * One heads-up notification per open desktop challenge. One tap opens
- * AuthPromptActivity, which raises the fingerprint prompt straight away;
- * swiping the notification away is a deny (its delete intent). No buttons —
- * the two gestures are the two answers. The notification times itself out at
- * the challenge's expiry and is cancelled on `authc` (a programmatic cancel
- * does not fire the delete intent, so a withdrawn challenge is not "denied").
+ * One heads-up notification per open desktop challenge, with the two answers
+ * as BUTTONS: `approve` opens AuthPromptActivity, which raises the fingerprint
+ * prompt straight away, and `deny` answers from the shade. A tap on the body
+ * is approve too. Swiping it away does NOTHING — an invisible gesture must
+ * never be the destructive answer. The notification times itself out at the
+ * challenge's expiry and is cancelled on `authc`.
  *
  * Its own channel, IMPORTANCE_HIGH: the beacon's channel is deliberately LOW
  * (a silent "Control Lattice" pill), and a request you just made at the desktop
@@ -29,15 +30,15 @@ import androidx.core.app.NotificationCompat
 object AuthNotifications {
     const val CHANNEL_ID = "desktop_auth"
     private const val ID_BASE = 4100
-    /** The app's accent (Theme.kt `Cyan`), as an ARGB int for the notification tint. */
-    private const val ACCENT = 0xFF7DD7DB.toInt()
+    /** The design system's accent, as an ARGB int for the notification tint. */
+    private val ACCENT: Int get() = com.lattice.app.lx.Roles.lattice.accent.toArgb()
 
     fun ensureChannel(context: Context) {
         val mgr = context.getSystemService(NotificationManager::class.java)
         if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
             mgr.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Desktop requests", NotificationManager.IMPORTANCE_HIGH).apply {
-                    description = "The desktop asks for your fingerprint: sudo, permissions."
+                NotificationChannel(CHANNEL_ID, context.getString(R.string.notif_channel_asks), NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = context.getString(R.string.notif_channel_asks_desc)
                     setShowBadge(false)
                     lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 }
@@ -63,8 +64,15 @@ object AuthNotifications {
                 .putExtra(AuthActionReceiver.EXTRA_ID, c.id),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val host = Names.host(c.host)
+        val question = when (c.kind) {
+            "unlock" -> context.getString(R.string.unlock_q, host)
+            "sudo" -> context.getString(R.string.sudo_q, host)
+            "test" -> context.getString(R.string.test_q, host)
+            else -> context.getString(R.string.polkit_q, c.message.ifBlank { c.action })
+        }
         val body = buildString {
-            append(c.action)
+            append(question)
             if (c.caller.isNotBlank()) append("  ·  ").append(c.caller)
         }
         // The status-bar glyph is tiny and grey on recent Android; the picture
@@ -84,16 +92,15 @@ object AuthNotifications {
             .setSmallIcon(R.drawable.ic_stat_fingerprint)
             .setColor(ACCENT)
             .setLargeIcon(large)
-            .setContentTitle(c.title)
+            .setContentTitle(context.getString(R.string.notif_asks, host))
             .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(
-                if (c.message.isBlank()) body else "$body\n${c.message}"
-            ))
+            .setStyle(NotificationCompat.BigTextStyle().bigText("$body\n${c.action}"))
+            .addAction(R.drawable.ic_stat_fingerprint, context.getString(R.string.deny), denyPi)
+            .addAction(R.drawable.ic_stat_fingerprint, context.getString(R.string.approve), openPi)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(openPi)
-            .setDeleteIntent(denyPi)
             .setAutoCancel(false)
             .setOngoing(false)
             .setTimeoutAfter(c.remaining * 1000L)
@@ -107,7 +114,7 @@ object AuthNotifications {
     }
 }
 
-/** The notification was swiped away: that is a deny. */
+/** The notification's deny button. */
 class AuthActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == ACTION_DENY) {

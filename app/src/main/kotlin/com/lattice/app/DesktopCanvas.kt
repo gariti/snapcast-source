@@ -18,7 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.systemGestureExclusion
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,6 +44,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.lattice.app.lx.LxPill
+import com.lattice.app.lx.LxBadge
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import kotlin.math.abs
@@ -71,6 +73,7 @@ fun DesktopCanvas(
     webPage: WebPage?,
     webMode: Boolean,
     onWebTitle: (String?) -> Unit,
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val fps = app.mirrorFps
@@ -212,45 +215,38 @@ fun DesktopCanvas(
         }
     }
 
-    // The chips that used to sit above the picture (terminal|mirror, the
-    // per-output whole-screen picks, live|paused) moved into the This-window
-    // sheet behind the title strip. The canvas is the picture and nothing else.
+    // The surface and nothing else: the picture, the text or the page. The
+    // card around it draws the bands, the window list and the status line.
+    val lx = com.lattice.app.lx.LxTheme.current
+    val surfaceError = when {
+        termMode -> termError
+        webMode -> null
+        else -> mirrorError
+    }
+    val pausedWhy = when {
+        !ready -> null
+        !mirrorOn -> androidx.compose.ui.res.stringResource(R.string.paused_by_you)
+        idle -> androidx.compose.ui.res.stringResource(R.string.paused_idle, Names.seconds(app.mirrorIdleSeconds))
+        meteredBlock -> androidx.compose.ui.res.stringResource(R.string.paused_metered)
+        else -> null
+    }
     Column(modifier) {
-        if (!ready) NoticeCard("Desktop not reachable", "The mirror needs the desktop's bridge. Check Settings for the link state.", Modifier.padding(16.dp))
-        val surfaceError = when {
-            termMode -> termError?.let { "Terminal: $it" }
-            webMode -> null
-            else -> mirrorError?.let { "Mirror: $it" }
+        if (!ready && !compact) {
+            com.lattice.app.lx.LxEmptyState(
+                headline = androidx.compose.ui.res.stringResource(R.string.desktop_not_answering, Names.host(app.host)),
+                steps = listOf(
+                    androidx.compose.ui.res.stringResource(R.string.desktop_not_answering_steps_1),
+                    androidx.compose.ui.res.stringResource(R.string.desktop_not_answering_steps_2),
+                ),
+                error = surfaceError,
+            )
+            return@Column
         }
-        surfaceError?.let { Text(it, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
-
-        val pausedWhy = when {
-            !ready || !mirrorOn -> null
-            idle -> "paused — no touch for ${app.mirrorIdleSeconds} s · tap to resume"
-            meteredBlock -> "paused on mobile data · allow it under Settings › Mirror"
-            else -> null
-        }
-        // The surface takes everything that is left. In terminal mode it is
-        // text on a grid; otherwise the mirror's picture, letterboxed to its
-        // own aspect ratio, with taps landing inside the window it shows.
-        // No padding: the canvas is width-bound in portrait (the rail already
-        // took 48dp), and MirrorView letterboxes to its own aspect ratio, so
-        // every dp here is picture.
-        //
-        // systemGestureExclusion keeps Android's left-edge back gesture off the
-        // leftward swipe that moves focus. The system caps exclusions at 200dp
-        // per edge, so this protects the bottom of the canvas rather than all
-        // of it — and it is moot on this phone today, which is in 3-button
-        // mode (`settings get secure navigation_mode` = 0). It matters the day
-        // that changes.
-        Box(
-            Modifier.weight(1f).fillMaxWidth().systemGestureExclusion(),
-            contentAlignment = Alignment.Center,
+        com.lattice.app.lx.LxSurface(
+            Modifier.weight(1f, fill = false).fillMaxWidth().systemGestureExclusion(),
+            fill = if (termMode) Vt.DEFAULT_BG else lx.roles.ground.copy(alpha = 0.7f),
         ) {
             if (webMode && webPage != null) {
-                // The page, rendered here. No mirror is running behind it —
-                // there would be nothing to look at, and not running it is
-                // the whole saving.
                 WebSurface(
                     url = webPage.url,
                     enabled = ready && foreground,
@@ -262,7 +258,7 @@ fun DesktopCanvas(
                 TerminalView(
                     screen = termScreen,
                     enabled = ready && termLive,
-                    waiting = pausedWhy ?: if (!termLive) "terminal paused" else null,
+                    waiting = pausedWhy ?: if (!termLive) androidx.compose.ui.res.stringResource(R.string.paused) else null,
                     zoom = app.termZoom,
                     onZoom = { app.termZoom = it },
                     onScroll = { Link.termScroll(it) },
@@ -275,25 +271,18 @@ fun DesktopCanvas(
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                MirrorView(frame = frame, enabled = ready, onZoom = { mirrorZoom = it })
-                if (pausedWhy != null) {
-                    Text(
-                        pausedWhy,
-                        Modifier
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                    )
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    MirrorView(frame = frame, enabled = ready, onZoom = { mirrorZoom = it })
+                    if (pausedWhy != null && !compact) {
+                        // Resume is a tap on the pill, never a click into the window.
+                        LxPill(pausedWhy, icon = androidx.compose.material.icons.Icons.Filled.Pause) {
+                            if (!mirrorOn) prefs.mirrorOn = true else Interaction.touch()
+                        }
+                    }
                 }
             }
         }
-        if (termMode) {
-            TerminalKeys(
-                enabled = ready && termLive && termScreen != null,
-                onInput = { Link.termInput(it) },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+        if (surfaceError != null && !compact) com.lattice.app.lx.LxStatus(surfaceError, com.lattice.app.lx.StatusTone.Error)
     }
 }
 
@@ -460,23 +449,13 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean, onZoom: (Float) -> Unit = {
                 contentScale = ContentScale.FillBounds,
             )
         } else {
-            Text(
-                if (enabled) "waiting for the first frame…" else "mirror off",
-                Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.labelMedium,
+            com.lattice.app.lx.LxText(
+                if (enabled) androidx.compose.ui.res.stringResource(R.string.waiting_first_frame) else androidx.compose.ui.res.stringResource(R.string.paused),
+                com.lattice.app.lx.Type.caption, com.lattice.app.lx.LxTheme.current.ink(0.45f),
+                Modifier.align(Alignment.Center),
             )
         }
-        if (scale > 1.01f) {
-            Text(
-                "%.1f×".format(scale),
-                Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(6.dp)
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
+        if (scale > 1.01f) LxBadge("%.1f×".format(scale))
     }
 }
 

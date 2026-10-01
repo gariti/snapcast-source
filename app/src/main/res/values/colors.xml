@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- wallust palette of the desktop this app extends (2026-09-13 render). -->
-    <color name="lattice_bg">#101314</color>
-    <color name="lattice_fg">#D2F1F2</color>
-    <color name="lattice_accent">#7DD7DB</color>
-    <color name="lattice_mid">#417273</color>
-    <!-- Theme.kt Light `background` -->
-    <color name="ground">#FFEDF4F4</color>
+    <!-- The design system's roles (lx/LxTheme.kt, Roles.lattice), for the few
+         places that need a colour before Compose draws. Dark-first: the roles
+         come from the wallpaper, not from the system's day/night. -->
+    <color name="lattice_bg">#141515</color>
+    <color name="lattice_fg">#E5E6E6</color>
+    <color name="lattice_accent">#50D6FF</color>
+    <color name="lattice_mid">#5F7A45</color>
+    <!-- The window's own background, painted before Compose gets a frame up. -->
+    <color name="ground">#FF141515</color>
 </resources>

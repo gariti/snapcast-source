@@ -10,12 +10,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CoroutineScope
@@ -134,10 +130,8 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            LatticeTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    LatticeApp(appState)
-                }
+            com.lattice.app.lx.LxTheme {
+                LatticeApp(appState)
             }
         }
     }
@@ -212,7 +206,7 @@ class MainActivity : ComponentActivity() {
 
         val code = PairingCrypto.normalize(uri.getQueryParameter("code") ?: "")
         if (code.isEmpty()) {
-            _pairStatus.value = "QR is missing the pairing code — regenerate it on the desktop."
+            _pairStatus.value = getString(R.string.qr_missing_code)
             return true
         }
         val tsHost = uri.getQueryParameter("host")?.trim() ?: ""
@@ -235,7 +229,7 @@ class MainActivity : ComponentActivity() {
         // drops. The primary stays the tailnet name — it is the one that also
         // works away from home.
         LinkHosts.storeLan(this, lanHosts)
-        _pairStatus.value = "QR scanned — verifying desktop…"
+        _pairStatus.value = getString(R.string.qr_verifying)
 
         val appCtx = applicationContext
         val candidates = (listOf(tsHost) + lanHosts).filter { it.isNotBlank() }.distinct()
@@ -256,17 +250,16 @@ class MainActivity : ComponentActivity() {
                 // home, and the LAN winner is already a raced candidate.
                 if (tsHost.isBlank()) prefs.edit().putString(KEY_HOST, chosen).apply()
                 val via = if (chosen == tsHost) "Tailscale" else "LAN"
-                _pairStatus.value = "Paired ✓ — desktop at $chosen ($via)"
+                _pairStatus.value = appCtx.getString(R.string.qr_paired, Names.host(chosen), via)
                 // Bounce the beacon so it picks up the new host + code now.
                 if (MediaSessionListener.isAccessGranted(appCtx)) {
                     MediaSessionBeaconService.stop(appCtx)
                     MediaSessionBeaconService.start(appCtx)
                 }
             } else if (provisional.isNotBlank()) {
-                _pairStatus.value = "Code + host saved ($provisional), but the desktop " +
-                    "didn't answer verification — is it on and on the same network/tailnet?"
+                _pairStatus.value = appCtx.getString(R.string.qr_no_answer, Names.host(provisional))
             } else {
-                _pairStatus.value = "Code saved. QR had no host — set the host field manually."
+                _pairStatus.value = appCtx.getString(R.string.qr_no_host)
             }
         }
         return true
