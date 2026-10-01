@@ -626,6 +626,7 @@ fun LxField(
     singleLine: Boolean = true,
     keyboardType: KeyboardType = KeyboardType.Text,
     modifier: Modifier = Modifier,
+    onDone: (() -> Unit)? = null,
 ) {
     val lx = LxTheme.current
     val r = lx.roles
@@ -646,7 +647,8 @@ fun LxField(
             onValueChange = onValueChange,
             enabled = enabled,
             singleLine = singleLine,
-            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = if (onDone != null) androidx.compose.ui.text.input.ImeAction.Go else androidx.compose.ui.text.input.ImeAction.Default),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onGo = { onDone?.invoke() }),
             textStyle = TextStyle(color = r.ink, fontFamily = lx.face, fontSize = lx.sp(Type.body), letterSpacing = 1.sp),
             cursorBrush = SolidColor(r.accent),
             modifier = Modifier.weight(1f).padding(vertical = lx.u(0.4f))

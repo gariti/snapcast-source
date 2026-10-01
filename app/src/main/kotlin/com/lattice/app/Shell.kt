@@ -347,8 +347,8 @@ private fun CanvasCard(
                     stringResource(R.string.page_label), editing ?: prettyUrl(web.current.ifBlank { webPage.url }),
                     { editing = it }, enabled = ready,
                     keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri,
+                    onDone = { editing?.let { web.load(it) }; editing = null },
                 )
-                LaunchedEffect(editing) { /* committed by the keyboard's Go in a later pass; a typed URL loads on blur */ }
                 Spacer(Modifier.height(lx.u(0.5f)))
             }
             val surfaceModifier = when {
