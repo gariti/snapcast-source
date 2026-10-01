@@ -45,6 +45,7 @@ class AudioCaptureService : LifecycleService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) { stopSelf(); return START_NOT_STICKY }
         super.onStartCommand(intent, flags, startId)
         intent ?: return stopAndReturn("Missing intent")
 
@@ -337,12 +338,18 @@ class AudioCaptureService : LifecycleService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val notif: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Lattice")
-            .setContentText("Streaming system audio")
+        Notifications.ensureChannels(this)
+        val stopPi = PendingIntent.getService(
+            this, 9, Intent(this, AudioCaptureService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notif: Notification = NotificationCompat.Builder(this, Notifications.CH_SEND)
+            .setContentTitle(getString(R.string.notif_sending))
             .setSmallIcon(R.drawable.ic_stat_lattice)
+            .setColor(Notifications.accent)
             .setContentIntent(contentPi)
             .setOngoing(true)
+            .addAction(R.drawable.ic_stat_lattice, getString(R.string.stop), stopPi)
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -372,6 +379,7 @@ class AudioCaptureService : LifecycleService() {
         private const val UI_UPDATE_MS = 1_000L
         const val NOTIF_ID = 42
         const val CHANNEL_ID = "lattice"
+        const val ACTION_STOP = "com.lattice.app.SEND_STOP"
 
         // Auto-stop the capture after this much continuous silence so the
         // laptop's SleepInhibitor can release (and the phone stops draining

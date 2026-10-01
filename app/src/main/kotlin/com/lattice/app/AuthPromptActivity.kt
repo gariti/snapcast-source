@@ -166,7 +166,7 @@ class AuthPromptActivity : FragmentActivity() {
                     LxButton("?", enabled = false) {}
                     LxHints(
                         if (denyArm.armed) listOf(Hint(stringResource(R.string.hint_tap), stringResource(R.string.tap_again_to_deny)))
-                        else listOf(Hint("touch", stringResource(R.string.hint_touch_approves)), Hint("◀", stringResource(R.string.hint_back_leaves)))
+                        else listOf(Hint("◀", stringResource(R.string.hint_dont_answer)))
                     )
                     LxButton(stringResource(R.string.deny), ButtonKind.Danger, armed = denyArm.armed, enabled = !busy) {
                         if (denyArm.press()) { DesktopAuth.deny(this@AuthPromptActivity, id); finish() }
@@ -184,7 +184,7 @@ class AuthPromptActivity : FragmentActivity() {
             onError(getString(R.string.auth_err_invalidated))
             return
         } catch (e: Exception) {
-            onError(getString(R.string.auth_err_nokey, e.message ?: ""))
+            onError(getString(R.string.auth_err_nokey))
             return
         }
         val payload = DesktopAuth.payload(c)
@@ -220,6 +220,7 @@ class AuthPromptActivity : FragmentActivity() {
 
                 override fun onAuthenticationFailed() {
                     // A non-matching finger; the prompt stays up and retries.
+                    onError(getString(R.string.auth_err_not_read))
                 }
             },
         )

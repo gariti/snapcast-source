@@ -1,6 +1,5 @@
 package com.lattice.app
 
-import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
@@ -12,7 +11,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,13 +80,8 @@ class MainActivity : ComponentActivity() {
         // instead of silently resizing the window underneath us.
         enableEdgeToEdge()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                100
-            )
-        }
+        // Notifications are asked for under More › Desktop, with the reason on
+        // screen ("so the desktop can ask for your fingerprint"), not here.
 
         // QR device flow: a lattice://pair deep link (scanned with the stock
         // camera) lands here on cold start. Must run BEFORE the prefs reads
@@ -148,10 +141,12 @@ class MainActivity : ComponentActivity() {
             MediaSessionBeaconService.start(this)
         }
         armUnlockPrompt()
+        foreground = true
     }
 
     override fun onPause() {
         super.onPause()
+        foreground = false
         unlockWatch?.cancel()
         unlockWatch = null
     }
@@ -285,6 +280,10 @@ class MainActivity : ComponentActivity() {
         private const val UNLOCK_WATCH_MS = 20_000L
 
         private val pairScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        /** Whether the app is in front: a Say result goes to the canvas then, to a notification otherwise. */
+        @Volatile var foreground = false
+            private set
 
         // Latest QR-pairing outcome, shown by DiscoveryCard.
         private val _pairStatus = MutableStateFlow<String?>(null)

@@ -56,6 +56,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.lattice.app.lx.LxPill
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.KeyboardTab
+import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -348,34 +355,35 @@ fun TerminalKeyStrips(
     modifier: Modifier = Modifier,
 ) {
     val lx = com.lattice.app.lx.LxTheme.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     var ctrl by remember { mutableStateOf(false) }
     val intArm = com.lattice.app.lx.rememberArm()
     val k = 1.55f
     Column(modifier, verticalArrangement = Arrangement.spacedBy(lx.u(0.4f))) {
         com.lattice.app.lx.LxKeyStrip {
-            com.lattice.app.lx.LxKey("esc", k, enabled = enabled) { onInput(Vt.ESC) }
-            com.lattice.app.lx.LxKey("⇥", k, enabled = enabled, contentDescription = "tab") { onInput(Vt.TAB) }
-            com.lattice.app.lx.LxKey("⇧⇥", k, enabled = enabled, contentDescription = "shift tab") { onInput(Vt.SHIFT_TAB) }
-            com.lattice.app.lx.LxKey("⌫", k, enabled = enabled, contentDescription = "backspace") { onInput(Vt.BACKSPACE) }
-            com.lattice.app.lx.LxKey("⏎", k, enabled = enabled, contentDescription = "enter") { onInput(Vt.ENTER) }
-            com.lattice.app.lx.LxKey("^C", k, enabled = enabled, warn = true, on = intArm.armed, contentDescription = "interrupt") {
+            com.lattice.app.lx.LxKey(ctx.getString(R.string.k_esc), k, enabled = enabled) { onInput(Vt.ESC) }
+            com.lattice.app.lx.LxKey("", k, enabled = enabled, icon = androidx.compose.material.icons.Icons.AutoMirrored.Filled.KeyboardTab, contentDescription = ctx.getString(R.string.k_tab)) { onInput(Vt.TAB) }
+            com.lattice.app.lx.LxKey("⇧⇥", k, enabled = enabled, contentDescription = ctx.getString(R.string.k_shift_tab)) { onInput(Vt.SHIFT_TAB) }
+            com.lattice.app.lx.LxKey("", k, enabled = enabled, icon = androidx.compose.material.icons.Icons.AutoMirrored.Filled.Backspace, contentDescription = ctx.getString(R.string.k_backspace)) { onInput(Vt.BACKSPACE) }
+            com.lattice.app.lx.LxKey("", k, enabled = enabled, icon = androidx.compose.material.icons.Icons.AutoMirrored.Filled.KeyboardReturn, contentDescription = ctx.getString(R.string.k_enter)) { onInput(Vt.ENTER) }
+            com.lattice.app.lx.LxKey("^C", k, enabled = enabled, warn = true, on = intArm.armed, contentDescription = ctx.getString(R.string.k_interrupt)) {
                 if (intArm.press()) onInput(Vt.ctrl('c'))
             }
         }
         com.lattice.app.lx.LxKeyStrip {
-            com.lattice.app.lx.LxKey("←", k, enabled = enabled, contentDescription = "left") { onInput(Vt.LEFT) }
-            com.lattice.app.lx.LxKey("↓", k, enabled = enabled, contentDescription = "down") { onInput(Vt.DOWN) }
-            com.lattice.app.lx.LxKey("↑", k, enabled = enabled, contentDescription = "up") { onInput(Vt.UP) }
-            com.lattice.app.lx.LxKey("→", k, enabled = enabled, contentDescription = "right") { onInput(Vt.RIGHT) }
-            com.lattice.app.lx.LxKey("ctrl", k, on = ctrl, enabled = enabled) { ctrl = !ctrl }
-            com.lattice.app.lx.LxKey("", k, on = keyboardOpen, enabled = enabled, wide = true,
-                icon = androidx.compose.material.icons.Icons.Filled.Keyboard, contentDescription = "keyboard") { onKeyboard() }
+            com.lattice.app.lx.LxKey("", k, enabled = enabled, icon = androidx.compose.material.icons.Icons.Filled.ArrowBack, contentDescription = ctx.getString(R.string.k_left)) { onInput(Vt.LEFT) }
+            com.lattice.app.lx.LxKey("", k, enabled = enabled, icon = androidx.compose.material.icons.Icons.Filled.ArrowDownward, contentDescription = ctx.getString(R.string.k_down)) { onInput(Vt.DOWN) }
+            com.lattice.app.lx.LxKey("", k, enabled = enabled, icon = androidx.compose.material.icons.Icons.Filled.ArrowUpward, contentDescription = ctx.getString(R.string.k_up)) { onInput(Vt.UP) }
+            com.lattice.app.lx.LxKey("", k, enabled = enabled, icon = androidx.compose.material.icons.Icons.Filled.ArrowForward, contentDescription = ctx.getString(R.string.k_right)) { onInput(Vt.RIGHT) }
+            com.lattice.app.lx.LxKey(ctx.getString(R.string.k_ctrl), k, on = ctrl, enabled = enabled) { ctrl = !ctrl }
+            com.lattice.app.lx.LxKey("", k, on = keyboardOpen, quiet = true, enabled = enabled, wide = true,
+                icon = androidx.compose.material.icons.Icons.Filled.Keyboard, contentDescription = ctx.getString(R.string.type_with_keyboard)) { onKeyboard() }
         }
         if (keyboardOpen) {
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(lx.radiusRow)).background(lx.ink(com.lattice.app.lx.Alpha.fieldBoxFocused))) {
                 ImeSink(
                     open = keyboardOpen, enabled = enabled,
-                    placeholder = if (ctrl) "ctrl + the next key" else "every key goes straight through",
+                    placeholder = if (ctrl) ctx.getString(R.string.k_ctrl) + " " + ctx.getString(R.string.latch_next) else ctx.getString(R.string.type_placeholder),
                     onText = { typed ->
                         if (ctrl && typed.length == 1) { onInput(Vt.ctrl(typed[0])); ctrl = false } else onInput(typed.toByteArray())
                     },

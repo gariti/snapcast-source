@@ -8,6 +8,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -58,6 +64,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
@@ -229,7 +238,7 @@ fun LxSection(label: String, badge: String? = null, here: Boolean = false, modif
                 lx.accent(if (here) 1f else Alpha.sectionIdle),
                 Modifier.semantics { heading() }, maxLines = 1, uppercase = true,
             )
-            if (badge != null) LxText(badge, Type.caption, lx.ink(0.4f), maxLines = 1)
+            if (badge != null) LxText(badge, Type.caption, lx.ink(Alpha.badge), maxLines = 1)
         }
         Spacer(Modifier.height(lx.u(0.4f)))
         Box(
@@ -311,6 +320,7 @@ fun LxRow(
                 else Modifier
             )
             .heightIn(min = lx.rowHeight)
+            .lxFocusRing(onClick != null)
             .padding(horizontal = lx.rowPad, vertical = lx.u(0.3f)),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(lx.u(0.6f)),
@@ -321,7 +331,7 @@ fun LxRow(
         if (icon != null) Icon(icon, null, Modifier.size(lx.u(1.3f)), tint = fg.copy(alpha = if (current) 1f else 0.7f))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(lx.u(0.1f))) {
             LxText(name, Type.body.copy(weight = FontWeight.Normal), fg.copy(alpha = if (dim) Alpha.pending else 1f), maxLines = if (current) 2 else 1)
-            if (meta != null) LxText(meta, Type.caption, fg.copy(alpha = if (dim) Alpha.pending * sec else sec), maxLines = 1)
+            if (meta != null) LxText(meta, Type.caption, fg.copy(alpha = if (dim) Alpha.pending * sec else sec), maxLines = 2)
         }
         trailing?.invoke(this)
         if (chevron) LxText("›", Type.title, fg.copy(alpha = sec), maxLines = 1)
@@ -353,6 +363,7 @@ fun LxChip(
     label: String,
     on: Boolean = false,
     warn: Boolean = false,
+    armed: Boolean = false,
     enabled: Boolean = true,
     key: String? = null,
     icon: ImageVector? = null,
@@ -362,16 +373,21 @@ fun LxChip(
     val lx = LxTheme.current
     val r = lx.roles
     val tone = if (warn) r.warn else r.accent
-    val fill by animateColorAsState(tone.copy(alpha = if (on) Alpha.chipCurrent else Alpha.chipRest), tween(lx.fast), label = "chipFill")
-    val border = tone.copy(alpha = if (on) 0.8f else 0.4f)
-    val fg = when { warn -> r.warn; on -> r.accent; else -> r.ink }
+    val fill by animateColorAsState(
+        when { armed -> lx.warnFill; on -> tone.copy(alpha = Alpha.chipCurrent); else -> tone.copy(alpha = Alpha.chipRest) },
+        tween(lx.fast), label = "chipFill",
+    )
+    val border = if (armed) lx.warnFill else tone.copy(alpha = if (on) 0.8f else 0.4f)
+    // On, the chip's text is the INK (the fill says "on"); warn as text is mixed toward the ink.
+    val fg = when { armed -> r.ink; warn -> lx.warnText; else -> r.ink }
     Row(
         modifier
-            .heightIn(min = lx.chipHeight)
+            .heightIn(min = lx.tap)
             .clip(CircleShape)
             .background(fill)
             .border(lx.hairline, border, CircleShape)
             .clickable(enabled = enabled, role = Role.Checkbox, onClick = onClick)
+            .lxFocusRing(true)
             .semantics { contentDescription = if (on) "$label, on" else label }
             .padding(horizontal = lx.u(0.95f)),
         verticalAlignment = Alignment.CenterVertically,
@@ -381,7 +397,7 @@ fun LxChip(
         if (key != null) LxText(key, Type.caption, lx.ink(Alpha.caption), maxLines = 1, uppercase = true)
         LxText(
             label,
-            Type.label.copy(tracking = 0.sp, weight = if (on) FontWeight.Medium else FontWeight.Normal),
+            Type.label.copy(tracking = 0.sp, weight = if (on || armed) FontWeight.Medium else FontWeight.Normal),
             fg.copy(alpha = if (enabled) 1f else Alpha.pending), maxLines = 1,
         )
     }
@@ -419,7 +435,7 @@ fun LxButton(
     val r = lx.roles
     val tone = when (kind) { ButtonKind.Quiet -> r.ink; ButtonKind.Primary -> r.wallpaper1; ButtonKind.Danger -> r.warn }
     val fill = when {
-        kind == ButtonKind.Danger && armed -> r.warn
+        kind == ButtonKind.Danger && armed -> lx.warnFill
         kind == ButtonKind.Primary -> tone
         pressed -> r.accent.copy(alpha = Alpha.chipHot)
         kind == ButtonKind.Danger -> Color.Transparent
@@ -427,19 +443,19 @@ fun LxButton(
     }
     val fillA by animateColorAsState(fill, tween(lx.instant), label = "btnFill")
     val border = when {
-        kind == ButtonKind.Danger && armed -> r.warn
+        kind == ButtonKind.Danger && armed -> lx.warnFill
         kind == ButtonKind.Primary -> tone
         pressed -> r.accent.copy(alpha = 0.8f)
         else -> tone.copy(alpha = Alpha.keycapBorder)
     }
     val fg = when {
-        kind == ButtonKind.Danger && armed -> r.ground
+        kind == ButtonKind.Danger && armed -> r.ink
         kind == ButtonKind.Primary -> r.ground
-        kind == ButtonKind.Danger -> r.warn
+        kind == ButtonKind.Danger -> lx.warnText
         pressed -> r.accent
         else -> r.ink
     }
-    val h = lx.u(if (kind == ButtonKind.Quiet) 2.4f else 2.55f)
+    val h = lx.tap
     Row(
         modifier
             .heightIn(min = h)
@@ -448,16 +464,17 @@ fun LxButton(
             .background(fillA)
             .border(lx.hairline, border, CircleShape)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .lxFocusRing(true)
             .semantics { if (contentDescription != null) this.contentDescription = contentDescription }
-            .padding(horizontal = if (label == null) lx.u(0.6f) else lx.u(1.1f))
-            .then(if (enabled) Modifier else Modifier.semantics { }),
+            // Text buttons take half the desktop's side padding; the height is the touch size.
+            .padding(horizontal = if (label == null) lx.u(0.6f) else lx.u(0.7f)),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(lx.u(0.4f)),
     ) {
         if (icon != null) Icon(icon, null, Modifier.size(lx.u(1.3f)), tint = fg.copy(alpha = if (enabled) 1f else Alpha.pending))
         if (label != null) LxText(
             label,
-            Type.label.copy(tracking = 1.sp, weight = if (kind == ButtonKind.Primary) FontWeight.Medium else FontWeight.Normal),
+            Type.label.copy(tracking = 1.sp, weight = if (kind == ButtonKind.Primary || armed) FontWeight.Medium else FontWeight.Normal),
             fg.copy(alpha = if (enabled) 1f else Alpha.pending), maxLines = 1,
         )
     }
@@ -507,6 +524,7 @@ fun LxKey(
     k: Float = 0.7f,
     on: Boolean = false,
     warn: Boolean = false,
+    quiet: Boolean = false,
     enabled: Boolean = true,
     wide: Boolean = false,
     icon: ImageVector? = null,
@@ -517,19 +535,30 @@ fun LxKey(
     val lx = LxTheme.current
     val r = lx.roles
     val h = lx.unit * k * 1.8f
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
     val fill by animateColorAsState(
-        if (on) r.accent.copy(alpha = Alpha.chipCurrent) else r.ink.copy(alpha = Alpha.keycapFill),
+        when {
+            on -> r.accent.copy(alpha = Alpha.chipCurrent)
+            quiet -> r.ink.copy(alpha = Alpha.keycapFill * 0.5f)
+            else -> r.ink.copy(alpha = Alpha.keycapFill)
+        },
         tween(lx.instant), label = "keyFill",
     )
     val border = if (on) r.accent.copy(alpha = 0.8f) else r.ink.copy(alpha = Alpha.keycapBorder)
-    val fg = when { on -> r.accent; warn -> r.warn; else -> r.ink.copy(alpha = Alpha.keycapLegend) }
+    // Latched, the legend is the ink (the fill says it); warn as text is mixed toward the ink.
+    val fg = when { on -> r.ink; warn -> lx.warnText; else -> r.ink.copy(alpha = Alpha.keycapLegend) }
+    // A key travels down on press — instant, and still under reduced motion (it is a state, not a loop).
+    val travel = with(LocalDensity.current) { (lx.unit * k * 0.26f * 0.3f).toPx() }
     Box(
         modifier
             .defaultMinSize(minWidth = if (wide) h * 1.6f else h, minHeight = h)
+            .graphicsLayer { translationY = if (pressed) travel else 0f }
             .clip(RoundedCornerShape(lx.unit * k * 0.3f))
             .background(fill)
             .border(lx.hairline, border, RoundedCornerShape(lx.unit * k * 0.3f))
-            .then(if (onClick != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick) else Modifier)
+            .lxFocusRing(onClick != null)
             .semantics { if (contentDescription != null) this.contentDescription = contentDescription }
             .padding(horizontal = lx.unit * k * 0.4f),
         contentAlignment = Alignment.Center,
@@ -574,7 +603,7 @@ fun RowScope.LxHints(hints: List<Hint>) {
         hints.forEach { h ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(lx.u(0.3f))) {
                 LxKey(h.key, k = 0.72f)
-                LxText(h.text, Type.caption, lx.ink(Alpha.secondary), maxLines = 1)
+                LxText(h.text, Type.caption, lx.ink(Alpha.keycapCaption), maxLines = 1)
             }
         }
     }
@@ -645,13 +674,13 @@ fun LxStatus(text: String, tone: StatusTone = StatusTone.Info, modifier: Modifie
     val r = lx.roles
     val color = when (tone) {
         StatusTone.Info -> lx.ink(Alpha.statusInfo)
-        StatusTone.Ok -> r.ok.copy(alpha = Alpha.statusWarn)
-        StatusTone.Warn -> r.caution.copy(alpha = Alpha.statusWarn)
-        StatusTone.Error -> r.warn
+        StatusTone.Ok -> lx.okText
+        StatusTone.Warn -> lx.cautionText
+        StatusTone.Error -> lx.warnText
     }
     Row(
         modifier.fillMaxWidth().heightIn(min = lx.u(1.6f)).padding(horizontal = lx.u(0.2f))
-            .semantics { contentDescription = text },
+            .semantics { contentDescription = text; liveRegion = LiveRegionMode.Polite },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(lx.u(0.5f)),
     ) {
@@ -748,4 +777,88 @@ fun animateShow(shown: Boolean): Float {
     val lx = LxTheme.current
     val a by animateFloatAsState(if (shown) 1f else 0f, tween(lx.fast), label = "show")
     return a
+}
+
+// ── the focus ring, the title door, the dialog, the meter ─────────────────
+
+/**
+ * The focus ring: the accent at the active-border alpha, drawn outside the
+ * stop. Keyboard / switch-access only — a touch never focuses a button, so
+ * this is the phone's :focus-visible.
+ */
+@Composable
+fun Modifier.lxFocusRing(stop: Boolean): Modifier {
+    if (!stop) return this
+    val lx = LxTheme.current
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    return this
+        .focusable(interactionSource = source)
+        .then(if (focused) Modifier.border(2.dp, lx.accent(Alpha.activeBorder), CircleShape) else Modifier)
+}
+
+/**
+ * The band title as the Window card's door: the wordmark with an unfold glyph,
+ * the caption under it, ONE tap target with a spoken name. Shrunk under a
+ * sheet it is the way back instead.
+ */
+@Composable
+fun RowScope.LxTitleDoor(
+    title: String,
+    caption: String,
+    unfold: Boolean,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val lx = LxTheme.current
+    Column(
+        modifier
+            .weight(1f)
+            .heightIn(min = lx.tap)
+            .clip(RoundedCornerShape(lx.radiusRow))
+            .clickable(role = Role.Button, onClick = onClick)
+            .lxFocusRing(true)
+            .semantics { this.contentDescription = contentDescription }
+            .padding(horizontal = lx.u(0.3f), vertical = lx.u(0.2f)),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(lx.u(0.25f))) {
+            LxText(title, Type.heading, modifier = Modifier.weight(1f, fill = false), maxLines = 1)
+            if (unfold) Icon(Icons.Filled.ExpandMore, null, Modifier.size(lx.u(1.1f)), tint = lx.ink(Alpha.caption))
+        }
+        LxText(caption, Type.caption, lx.ink(Alpha.caption), maxLines = 2)
+    }
+}
+
+/** A card's secondary task as a DIALOG over its dimmed tile: a section label, the one thing it needs. */
+@Composable
+fun LxDialog(title: String, badge: String? = null, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    val lx = LxTheme.current
+    val r = lx.roles
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(lx.radiusPane))
+            .background(r.surface.copy(alpha = Alpha.paneActive))
+            .border(2.dp, r.accent.copy(alpha = Alpha.activeBorder), RoundedCornerShape(lx.radiusPane))
+            .padding(lx.inset)
+            .semantics { contentDescription = title },
+    ) {
+        LxSection(title, badge = badge, here = true)
+        content()
+    }
+}
+
+/** A level meter: ink track, accent fill. Fed at 6 Hz or slower; still at rest. */
+@Composable
+fun LxMeter(level: Float, modifier: Modifier = Modifier) {
+    val lx = LxTheme.current
+    val v by animateFloatAsState(level.coerceIn(0f, 1f), tween(lx.fast), label = "meter")
+    Box(
+        modifier.fillMaxWidth().height(lx.u(0.5f)).clip(CircleShape).background(lx.ink(Alpha.hairline))
+            .semantics { contentDescription = "input level" },
+    ) {
+        Box(Modifier.fillMaxWidth(fraction = v.coerceAtLeast(0.001f)).height(lx.u(0.5f)).clip(CircleShape).background(lx.roles.accent))
+    }
 }

@@ -79,6 +79,9 @@
         <receiver
             android:name=".AuthActionReceiver"
             android:exported="false" />
+        <receiver
+            android:name=".SayUndoReceiver"
+            android:exported="false" />
 
         <service
             android:name=".AudioCaptureService"

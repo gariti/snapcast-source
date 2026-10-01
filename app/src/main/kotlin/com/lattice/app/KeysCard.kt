@@ -2,6 +2,7 @@ package com.lattice.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,11 +13,21 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
+import androidx.compose.material.icons.automirrored.filled.KeyboardTab
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.SpaceBar
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,11 +36,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.RowScope
 import com.lattice.app.lx.Alpha
-import com.lattice.app.lx.ButtonKind
 import com.lattice.app.lx.Hint
 import com.lattice.app.lx.LxButton
 import com.lattice.app.lx.LxCaption
@@ -44,11 +61,12 @@ import com.lattice.app.lx.LxText
 import com.lattice.app.lx.LxTheme
 import com.lattice.app.lx.LxWordmark
 import com.lattice.app.lx.Type
+import com.lattice.app.lx.lxFocusRing
 import kotlin.math.abs
 
 /**
  * The modifier latches. Latches rather than chords because holding two keys at
- * once is not something a touchscreen does well: tap `ctrl`, then tap the key.
+ * once is not something a touchscreen does well: tap `Ctrl`, then tap the key.
  * One-shot: the next key takes the latch and clears it.
  */
 class ModState {
@@ -95,8 +113,6 @@ class KeySink(val termMode: Boolean) {
         val armed = mods.armed.filter { it != "shift" }
         when {
             armed.isEmpty() -> text(s)
-            // Some IMEs batch a whole word into one change despite
-            // KeyboardType.Password. An 8-letter chord is meaningless.
             s.length > 1 -> text(s)
             else -> {
                 val sym = keysym(s[0].lowercaseChar())
@@ -131,23 +147,22 @@ private fun keysym(c: Char): String? = when {
     }
 }
 
-private val ROW_1 = listOf("Escape" to "esc", "Tab" to "⇥", "Return" to "⏎", "BackSpace" to "⌫", "Delete" to "del")
-private val ROW_2 = listOf("Left" to "←", "Down" to "↓", "Up" to "↑", "Right" to "→")
-private val MORE_1 = listOf("space" to "␣", "Home" to "home", "End" to "end", "Page_Up" to "pgup", "Page_Down" to "pgdn")
-private val F_KEYS = (1..12).map { "F$it" to "F$it" }
-
 /**
- * The Keys card: a trackpad (always open), the keys a phone keyboard has no
- * room for, the latches, and `type`, which is the ONLY thing that raises the
- * phone's keyboard.
+ * The Keys card: a trackpad (always open) and the keys a phone keyboard has
+ * no room for, laid out as a real keyboard: the letters' own place (A–Z,
+ * between Tab and Enter) is the ONE tap that raises the phone's keyboard; the
+ * special keys sit where a desktop keyboard puts them, the arrows as an
+ * inverted T under Ins/Home/PgUp · Del/End/PgDn.
  */
 @Composable
 fun KeysCard(ready: Boolean, termMode: Boolean, focused: Link.Win?) {
     val lx = LxTheme.current
     val mods = remember { ModState() }
     val sink = remember(termMode) { KeySink(termMode) }
-    var more by remember { mutableStateOf(false) }
     var typing by remember { mutableStateOf(false) }
+    var fKeys by remember { mutableStateOf(false) }
+
+    fun send(key: String) { Interaction.touch(); sink.named(key, mods.armed); mods.clear() }
 
     LxCard(
         active = true,
@@ -172,27 +187,18 @@ fun KeysCard(ready: Boolean, termMode: Boolean, focused: Link.Win?) {
 
                 LxSectionGap()
                 LxSection(stringResource(R.string.keys_title), badge = stringResource(R.string.next_key_latch))
-                KeyRow(ROW_1, sink, mods, ready)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    ROW_2.forEach { (k, label) ->
-                        LxKey(label, k = 1.55f, enabled = ready, modifier = Modifier.weight(1f).padding(end = lx.u(0.3f))) {
-                            Interaction.touch(); sink.named(k, mods.armed); mods.clear()
-                        }
+                KeyboardGrid(
+                    enabled = ready, mods = mods, typing = typing, fKeys = fKeys,
+                    onKey = ::send, onLetters = { typing = !typing }, onFKeys = { fKeys = !fKeys },
+                )
+                if (fKeys) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(lx.u(0.25f))) {
+                        (1..6).forEach { n -> LxKey("F$n", k = 1.3f, enabled = ready, modifier = Modifier.weight(1f)) { send("F$n") } }
                     }
-                    LxKey(if (more) stringResource(R.string.fewer_keys) else stringResource(R.string.more_keys), k = 1.55f, enabled = ready, modifier = Modifier.weight(1.2f)) { more = !more }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(lx.u(0.25f))) {
+                        (7..12).forEach { n -> LxKey("F$n", k = 1.3f, enabled = ready, modifier = Modifier.weight(1f)) { send("F$n") } }
+                    }
                 }
-                if (more) {
-                    KeyRow(MORE_1, sink, mods, ready)
-                    KeyRow(F_KEYS.subList(0, 6), sink, mods, ready)
-                    KeyRow(F_KEYS.subList(6, 12), sink, mods, ready)
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(lx.u(0.3f))) {
-                    LxKey("ctrl", k = 1.55f, on = mods.ctrl, enabled = ready, modifier = Modifier.weight(1f)) { mods.ctrl = !mods.ctrl }
-                    LxKey("alt", k = 1.55f, on = mods.alt, enabled = ready, modifier = Modifier.weight(1f)) { mods.alt = !mods.alt }
-                    LxKey("shift", k = 1.55f, on = mods.shift, enabled = ready, modifier = Modifier.weight(1f)) { mods.shift = !mods.shift }
-                    LxKey("super", k = 1.55f, on = mods.sup, enabled = ready, modifier = Modifier.weight(1f)) { mods.sup = !mods.sup }
-                }
-
                 if (typing) {
                     Spacer(Modifier.height(lx.u(0.2f)))
                     Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(lx.radiusRow)).background(lx.ink(Alpha.fieldBoxFocused))) {
@@ -201,32 +207,114 @@ fun KeysCard(ready: Boolean, termMode: Boolean, focused: Link.Win?) {
                             placeholder = if (mods.armed.isEmpty()) stringResource(R.string.type_placeholder)
                             else mods.armed.joinToString("+") + " " + stringResource(R.string.latch_next),
                             onText = { sink.typed(it, mods) },
-                            onBackspace = { sink.named("BackSpace", mods.armed); mods.clear() },
-                            onEnter = { sink.named("Return", mods.armed); mods.clear() },
+                            onBackspace = { send("BackSpace") },
+                            onEnter = { send("Return") },
                         )
                     }
                 }
             }
         },
         bottom = {
-            val latch = mods.armed.joinToString("+")
-            LxHints(
-                if (latch.isNotEmpty()) listOf(Hint(latch, stringResource(R.string.latch_next)))
-                else listOf(Hint(stringResource(R.string.hint_tap), stringResource(R.string.hint_click)), Hint("◀", stringResource(R.string.hint_back_to_window)))
-            )
-            LxButton(stringResource(R.string.type_), ButtonKind.Primary, icon = Icons.Filled.Keyboard, enabled = ready, pressed = typing) { typing = !typing }
+            val latch = mods.armed.joinToString("+") { it.replaceFirstChar(Char::uppercase) }
+            LxButton("?", enabled = false) {}
+            LxHints(if (latch.isNotEmpty()) listOf(Hint(latch, stringResource(R.string.latch_next))) else emptyList())
         },
     )
 }
 
+/**
+ * The keyboard grid, as a desktop keyboard lays it out. Left block: Esc ·
+ * Tab · Shift down the edge, the letters (one tall button, the tap that raises
+ * the phone's keyboard) in the middle, Backspace and a tall Enter on its
+ * right; Ctrl · Super · Alt · Space along the bottom. Right block: Ins Home
+ * PgUp / Del End PgDn / F1–12 ↑ / ← ↓ →. Every cap is one LxKey.
+ */
 @Composable
-private fun KeyRow(keys: List<Pair<String, String>>, sink: KeySink, mods: ModState, enabled: Boolean) {
+private fun KeyboardGrid(
+    enabled: Boolean,
+    mods: ModState,
+    typing: Boolean,
+    fKeys: Boolean,
+    onKey: (String) -> Unit,
+    onLetters: () -> Unit,
+    onFKeys: () -> Unit,
+) {
     val lx = LxTheme.current
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(lx.u(0.3f))) {
-        keys.forEach { (k, label) ->
-            LxKey(label, k = 1.55f, enabled = enabled, modifier = Modifier.weight(1f)) {
-                Interaction.touch(); sink.named(k, mods.armed); mods.clear()
+    val gap = lx.u(0.25f)
+    val k = 1.45f
+    val rowH = lx.unit * k * 1.8f
+    @Composable fun RowScope.Key(legend: String, key: String, w: Float = 1f, icon: ImageVector? = null, desc: String? = null, on: Boolean = false, onClick: (() -> Unit)? = null) {
+        LxKey(legend, k = k, on = on, enabled = enabled, icon = icon, contentDescription = desc ?: legend,
+            modifier = Modifier.weight(w).height(rowH)) { onClick?.invoke() ?: onKey(key) }
+    }
+    @Composable fun ColumnScope.Key(legend: String, key: String, icon: ImageVector? = null, desc: String? = null, on: Boolean = false, tall: Boolean = false, onClick: (() -> Unit)? = null) {
+        LxKey(legend, k = k, on = on, enabled = enabled, icon = icon, contentDescription = desc ?: legend,
+            modifier = Modifier.fillMaxWidth().height(if (tall) rowH * 2 + gap else rowH)) { onClick?.invoke() ?: onKey(key) }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+            // the left edge: Esc · Tab · Shift
+            Column(Modifier.weight(2f), verticalArrangement = Arrangement.spacedBy(gap)) {
+                Key(stringResource(R.string.k_esc), "Escape")
+                Key("", "Tab", icon = Icons.AutoMirrored.Filled.KeyboardTab, desc = stringResource(R.string.k_tab))
+                Key(stringResource(R.string.k_shift), "", on = mods.shift) { mods.shift = !mods.shift }
             }
+            // the letters: one tall button, the tap that types
+            LettersKey(Modifier.weight(4f).height(rowH * 3 + gap * 2), enabled = enabled, on = typing, onClick = onLetters)
+            // Backspace · Enter (tall)
+            Column(Modifier.weight(2f), verticalArrangement = Arrangement.spacedBy(gap)) {
+                Key("", "BackSpace", icon = Icons.AutoMirrored.Filled.Backspace, desc = stringResource(R.string.k_backspace))
+                Key("", "Return", icon = Icons.AutoMirrored.Filled.KeyboardReturn, desc = stringResource(R.string.k_enter), tall = true)
+            }
+            Spacer(Modifier.weight(0.5f))
+            // the right block
+            Column(Modifier.weight(6f), verticalArrangement = Arrangement.spacedBy(gap)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    Key(stringResource(R.string.k_ins), "Insert"); Key(stringResource(R.string.k_home), "Home"); Key(stringResource(R.string.k_pgup), "Page_Up")
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    Key(stringResource(R.string.k_del), "Delete"); Key(stringResource(R.string.k_end), "End"); Key(stringResource(R.string.k_pgdn), "Page_Down")
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    LxKey(stringResource(R.string.f_keys), k = k, quiet = true, on = fKeys, enabled = enabled, modifier = Modifier.weight(1f).height(rowH), onClick = onFKeys)
+                    Key("", "Up", icon = Icons.Filled.ArrowUpward, desc = stringResource(R.string.k_up))
+                    Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+            Key(stringResource(R.string.k_ctrl), "", 2f, on = mods.ctrl) { mods.ctrl = !mods.ctrl }
+            Key(stringResource(R.string.k_super), "", 2f, on = mods.sup) { mods.sup = !mods.sup }
+            Key(stringResource(R.string.k_alt), "", 2f, on = mods.alt) { mods.alt = !mods.alt }
+            Key("", "space", 2f, icon = Icons.Filled.SpaceBar, desc = stringResource(R.string.k_space))
+            Spacer(Modifier.weight(0.5f))
+            Key("", "Left", 2f, icon = Icons.Filled.ArrowBack, desc = stringResource(R.string.k_left))
+            Key("", "Down", 2f, icon = Icons.Filled.ArrowDownward, desc = stringResource(R.string.k_down))
+            Key("", "Right", 2f, icon = Icons.Filled.ArrowForward, desc = stringResource(R.string.k_right))
+        }
+    }
+}
+
+/** The A–Z button: the letters' own place, and the one tap that raises the phone's keyboard. */
+@Composable
+private fun LettersKey(modifier: Modifier, enabled: Boolean, on: Boolean, onClick: () -> Unit) {
+    val lx = LxTheme.current
+    val desc = stringResource(R.string.type_with_keyboard)
+    Box(
+        modifier
+            .clip(RoundedCornerShape(lx.radiusCard))
+            .background(if (on) lx.accent(Alpha.chipCurrent) else lx.ink(Alpha.keycapFill))
+            .border(lx.hairline, if (on) lx.accent(0.8f) else lx.ink(Alpha.keycapBorder), RoundedCornerShape(lx.radiusCard))
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .lxFocusRing(true)
+            .semantics { contentDescription = desc },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(lx.u(0.2f))) {
+            Icon(Icons.Filled.Keyboard, null, Modifier.width(lx.u(1.5f)), tint = lx.roles.ink)
+            LxText(stringResource(R.string.letters), Type.label.copy(tracking = 0.sp), lx.roles.ink)
+            LxText(stringResource(R.string.tap_to_type), Type.caption, lx.ink(Alpha.keycapCaption))
         }
     }
 }
@@ -243,7 +331,7 @@ private fun Trackpad(enabled: Boolean) {
     Box(
         Modifier
             .fillMaxWidth()
-            .aspectRatio(16f / 9f)
+            .aspectRatio(16f / 7f)
             .clip(RoundedCornerShape(lx.radiusCard))
             .background(lx.ink(if (dragging) 0.08f else 0.04f))
             .border(lx.hairline, if (dragging) lx.roles.accent else lx.roles.line.copy(alpha = 0.4f), RoundedCornerShape(lx.radiusCard))
@@ -291,7 +379,7 @@ private fun Trackpad(enabled: Boolean) {
     ) {
         LxText(
             stringResource(R.string.trackpad_hint), Type.caption,
-            lx.ink(if (enabled) 0.45f else 0.25f), align = TextAlign.Center,
+            lx.ink(if (enabled) Alpha.caption else 0.25f), align = TextAlign.Center,
         )
     }
 }

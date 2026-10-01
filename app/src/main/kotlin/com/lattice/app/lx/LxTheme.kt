@@ -8,6 +8,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -68,19 +69,21 @@ object Alpha {
     const val chipCurrent = 0.42f
     const val dim = 0.28f
     const val idleBorder = 0.35f
-    const val caption = 0.5f
-    const val secondary = 0.55f
+    const val caption = 0.64f      // one rung up on the phone (was 0.5)
+    const val secondary = 0.64f    // (was 0.55)
     const val activeBorder = 0.6f
     const val paneIdle = 0.78f
     const val paneActive = 0.92f
     const val keycapFill = 0.14f
     const val keycapBorder = 0.35f
     const val keycapLegend = 0.92f
-    const val sectionIdle = 0.5f
+    const val keycapCaption = 0.68f
+    const val sectionIdle = 0.8f   // (was 0.5)
+    const val badge = 0.62f
     const val ruleIdle = 0.15f
     const val ruleActive = 0.7f
     const val pending = 0.55f
-    const val statusInfo = 0.45f
+    const val statusInfo = 0.64f   // (was 0.45)
     const val statusWarn = 0.85f
     const val placeholder = 0.3f
     const val fieldRuleIdle = 0.25f
@@ -142,6 +145,17 @@ data class Lx(
 
     fun ink(alpha: Float) = roles.ink.copy(alpha = alpha)
     fun accent(alpha: Float) = roles.accent.copy(alpha = alpha)
+
+    /** 44 dp at the phone unit: every stop is at least this. */
+    val tap: Dp get() = unit * 2.95f
+    /** warn as TEXT: mixed toward the ink so it reads on the pane (≥ 4.5:1). */
+    val warnText: Color get() = lerp(roles.warn, roles.ink, 0.38f)
+    /** ok as TEXT. */
+    val okText: Color get() = lerp(roles.ok, roles.ink, 0.5f)
+    /** caution as TEXT. */
+    val cautionText: Color get() = lerp(roles.caution, roles.ink, 0.25f)
+    /** The armed fill: warn a step toward the ground, with the ink on it. */
+    val warnFill: Color get() = lerp(roles.warn, roles.ground, 0.18f)
 }
 
 val LocalLx = staticCompositionLocalOf { Lx() }

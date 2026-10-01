@@ -1,6 +1,8 @@
 package com.lattice.app
 
 import android.app.Notification
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.distinctUntilChanged
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -242,35 +244,28 @@ class MediaSessionBeaconService : LifecycleService() {
         return PairingCrypto.normalize(prefs.getString(PairingCrypto.PREFS_KEY_PSK, "") ?: "")
     }
 
-    private fun startInForeground() {
-        val launchIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+    /** The Link notification, from the real state: linked or not, and the window on the phone. */
+    private fun linkNotification(): Notification {
+        val linked = ControlChannelClient.current.value?.sessionReady == true
+        val host = Prefs.of(this).getString(Prefs.KEY_HOST, "") ?: ""
+        val fps = Prefs.of(this).getInt(Prefs.KEY_MIRROR_FPS, Prefs.DEFAULT_MIRROR_FPS)
+        return Notifications.link(this, linked, host, Link.desk.value.focused?.let { Names.windowTitle(it) }, fps)
+    }
+
+    /** Keep it honest: re-post when the link or the focused window changes. */
+    private fun watchLinkNotification() {
+        lifecycleScope.launch {
+            kotlinx.coroutines.flow.combine(Link.desk, Link.client) { d, c -> (d.focused?.id to (c?.sessionReady == true)) }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect {
+                    runCatching { getSystemService(NotificationManager::class.java).notify(NOTIF_ID, linkNotification()) }
+                }
         }
-        val contentPi = PendingIntent.getActivity(
-            this,
-            1,
-            launchIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
+    }
 
-        val dictatePi = PendingIntent.getForegroundService(
-            this,
-            2,
-            Intent(this, DictationService::class.java).setAction(DictationService.ACTION_START),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val notif: Notification = NotificationCompat.Builder(this, AudioCaptureService.CHANNEL_ID)
-            // The persistent pill is the app's front door — it is how you get to
-            // the desktop when it is locked (MainActivity raises the fingerprint
-            // on entry), so it is labelled as the action, not as a status.
-            .setContentTitle("Control Lattice")
-            .setContentText("Linked to the desktop")
-            .setSmallIcon(R.drawable.ic_stat_lattice)
-            .setContentIntent(contentPi)
-            .setOngoing(true)
-            .addAction(0, "Dictate", dictatePi)
-            .build()
-
+    private fun startInForeground() {
+        val notif: Notification = linkNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIF_ID,
@@ -280,7 +275,9 @@ class MediaSessionBeaconService : LifecycleService() {
         } else {
             startForeground(NOTIF_ID, notif)
         }
+        if (!watching) { watching = true; watchLinkNotification() }
     }
+    private var watching = false
 
     sealed class ServiceState {
         data class Idle(val reason: String) : ServiceState()

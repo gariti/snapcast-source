@@ -121,7 +121,7 @@ fun WindowCard(
                         focusThen(unit("SwitchPresetColumnWidth"))
                     }
                     LxDivider()
-                    LxRow(stringResource(R.string.move), stringResource(R.string.move_meta), icon = Icons.Filled.Monitor, chevron = true, current = moveOpen, enabled = enabled) {
+                    LxRow(stringResource(R.string.move), stringResource(R.string.move_meta), icon = Icons.Filled.SwapHoriz, chevron = true, current = moveOpen, enabled = enabled) {
                         moveOpen = !moveOpen
                     }
                     if (moveOpen) {
@@ -145,7 +145,8 @@ fun WindowCard(
             }
         },
         bottom = {
-            LxHints(listOf(Hint(stringResource(R.string.hint_tap), stringResource(R.string.hint_does_it)), Hint("◀", stringResource(R.string.hint_back_to_window))))
+            LxButton("?", enabled = false) {}
+            LxHints(listOf(Hint("◀", stringResource(R.string.hint_back))))
             if (prefs.mirrorOn) LxButton(stringResource(R.string.pause), icon = Icons.Filled.Pause) { prefs.mirrorOn = false }
             else LxButton(stringResource(R.string.resume), icon = Icons.Filled.PlayArrow, pressed = true) { prefs.mirrorOn = true }
         },

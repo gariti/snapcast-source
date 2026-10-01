@@ -5,6 +5,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -20,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.lattice.app.lx.ButtonKind
-import com.lattice.app.lx.Hint
 import com.lattice.app.lx.LxButton
 import com.lattice.app.lx.LxCaption
 import com.lattice.app.lx.LxCard
@@ -37,9 +37,9 @@ import com.lattice.app.lx.StatusTone
 
 /**
  * Ears: what is on your ears and whether the desktop plays here; and sending
- * this phone's audio to the desktop. Two jobs, not four — the phone's own
- * media transport is Android's, and the house speakers' admin moved to
- * More › Speakers.
+ * this phone's audio to the desktop. Two jobs, not four. The speaker slot is
+ * picked for you (the first free one; the desktop's control panel moves it),
+ * so there is no slot row; the phone's own media transport is Android's.
  */
 @Composable
 fun EarsCard(app: AppState, ready: Boolean) {
@@ -55,14 +55,13 @@ fun EarsCard(app: AppState, ready: Boolean) {
         "bt", "wired", "usb" -> route.name.ifBlank { stringResource(R.string.ears_title) }
         else -> stringResource(R.string.phone_speaker)
     }
-    val earsCaption = listOfNotNull(earsName, route.battery?.let { "$it %" }).joinToString(" · ")
 
     LxCard(
         active = true,
         top = {
             Column(Modifier.weight(1f)) {
                 LxWordmark(stringResource(R.string.ears_title))
-                LxCaption(earsCaption)
+                LxCaption(listOfNotNull(earsName, route.battery?.let { "$it %" }).joinToString(" · "))
             }
         },
         tile = {
@@ -70,7 +69,7 @@ fun EarsCard(app: AppState, ready: Boolean) {
                 LxSection(stringResource(R.string.hear), here = true)
                 LxRow(
                     earsName,
-                    listOfNotNull(route.battery?.let { "$it %" }, stringResource(R.string.headset_meta)).joinToString(" · "),
+                    listOfNotNull(route.battery?.let { stringResource(R.string.battery_pct, it) }, stringResource(R.string.headset_meta)).joinToString(" · "),
                     icon = if (route.out == "speaker") Icons.Filled.Speaker else Icons.Filled.Headphones,
                 )
                 LxDivider()
@@ -98,39 +97,33 @@ fun EarsCard(app: AppState, ready: Boolean) {
                     LxChip(stringResource(R.string.to_speakers), on = app.partyMode, enabled = !streaming) { app.partyMode = true; app.onPartyModeChange(true) }
                     LxChip(stringResource(R.string.to_visualizer), on = !app.partyMode, enabled = !streaming) { app.partyMode = false; app.onPartyModeChange(false) }
                 }
-                if (app.partyMode) {
-                    LxSectionGap()
-                    LxChips {
-                        SLOT_PORTS.forEachIndexed { idx, _ ->
-                            LxChip("${idx + 1}", on = app.slotIndex == idx, enabled = !streaming, key = stringResource(R.string.speaker_slot)) {
-                                app.slotIndex = idx; app.onSlotChange(idx)
-                            }
-                        }
-                    }
-                }
-                LxSectionGap()
-                val (text, tone) = when (val s = state) {
-                    is ConnectionState.Idle -> stringResource(R.string.not_sending) to StatusTone.Info
-                    is ConnectionState.Connecting -> stringResource(R.string.connecting) to StatusTone.Info
+                val (name, meta) = when (val s = state) {
+                    is ConnectionState.Idle -> stringResource(R.string.not_sending) to (if (app.partyMode) stringResource(R.string.slot_picked) else null)
+                    is ConnectionState.Connecting -> stringResource(R.string.connecting) to null
                     is ConnectionState.Connected ->
-                        if (s.rms < 0.001f) stringResource(R.string.sending_silent) to StatusTone.Warn
-                        else stringResource(R.string.sending) to StatusTone.Ok
-                    is ConnectionState.Reconnecting -> stringResource(R.string.reconnecting) to StatusTone.Warn
-                    is ConnectionState.Failed -> "${stringResource(R.string.could_not_connect)} · ${s.reason}" to StatusTone.Error
+                        if (s.rms < 0.001f) stringResource(R.string.sending) to stringResource(R.string.nothing_playing)
+                        else stringResource(R.string.sending) to null
+                    is ConnectionState.Reconnecting -> stringResource(R.string.reconnecting) to null
+                    is ConnectionState.Failed -> stringResource(R.string.could_not_reach_speakers) to s.reason
                 }
-                LxStatus(text, tone)
+                LxRow(name, meta, warn = state is ConnectionState.Failed)
+                Spacer(Modifier.weight(1f))
+                LxStatus(stringResource(R.string.record_screen_note))
             }
         },
         bottom = {
-            LxHints(
-                if (streaming) listOf(Hint("◀", stringResource(R.string.hint_back_to_window)))
-                else listOf(Hint(stringResource(R.string.start), stringResource(R.string.hint_start_record)))
-            )
+            LxButton("?", enabled = false) {}
+            LxHints(emptyList())
             if (streaming) LxButton(stringResource(R.string.stop), ButtonKind.Danger, onClick = app.onStopCapture)
             else LxButton(stringResource(R.string.start), ButtonKind.Primary, icon = Icons.Filled.Cast, enabled = app.host.isNotBlank()) {
-                val port = if (app.partyMode) SLOT_PORTS[app.slotIndex] else SPECTRUM_PORT
+                // The slot is picked for you: the first one (the control panel
+                // moves it on the desktop); the pref survives for that.
+                val port = if (app.partyMode) SLOT_PORTS[app.slotIndex.coerceIn(0, SLOT_PORTS.size - 1)] else SPECTRUM_PORT
                 app.onStartCapture(app.host, port, if (app.partyMode) "party" else "solo")
             }
         },
     )
 }
+
+@Suppress("unused")
+private val keepTone = StatusTone.Info

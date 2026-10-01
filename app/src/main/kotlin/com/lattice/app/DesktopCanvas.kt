@@ -72,8 +72,10 @@ fun DesktopCanvas(
     termMode: Boolean,
     webPage: WebPage?,
     webMode: Boolean,
+    web: WebController,
     onWebTitle: (String?) -> Unit,
     compact: Boolean = false,
+    zoomRequest: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val fps = app.mirrorFps
@@ -235,8 +237,8 @@ fun DesktopCanvas(
             com.lattice.app.lx.LxEmptyState(
                 headline = androidx.compose.ui.res.stringResource(R.string.desktop_not_answering, Names.host(app.host)),
                 steps = listOf(
-                    androidx.compose.ui.res.stringResource(R.string.desktop_not_answering_steps_1),
-                    androidx.compose.ui.res.stringResource(R.string.desktop_not_answering_steps_2),
+                    androidx.compose.ui.res.stringResource(R.string.lost_step_1),
+                    androidx.compose.ui.res.stringResource(R.string.lost_step_2),
                 ),
                 error = surfaceError,
             )
@@ -250,7 +252,7 @@ fun DesktopCanvas(
                 WebSurface(
                     url = webPage.url,
                     enabled = ready && foreground,
-                    onOpenOnDesktop = { u -> Link.act("Spawn", "command" to org.json.JSONArray(listOf("xdg-open", u))) },
+                    controller = web,
                     onTitle = onWebTitle,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -272,7 +274,7 @@ fun DesktopCanvas(
                 )
             } else {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    MirrorView(frame = frame, enabled = ready, onZoom = { mirrorZoom = it })
+                    MirrorView(frame = frame, enabled = ready, onZoom = { mirrorZoom = it }, zoomRequest = zoomRequest)
                     if (pausedWhy != null && !compact) {
                         // Resume is a tap on the pill, never a click into the window.
                         LxPill(pausedWhy, icon = androidx.compose.material.icons.Icons.Filled.Pause) {
@@ -301,7 +303,7 @@ private fun isMetered(ctx: android.content.Context): Boolean =
 private const val MIRROR_MAX_ZOOM = 5f
 
 @Composable
-fun MirrorView(frame: Link.Frame?, enabled: Boolean, onZoom: (Float) -> Unit = {}) {
+fun MirrorView(frame: Link.Frame?, enabled: Boolean, onZoom: (Float) -> Unit = {}, zoomRequest: Int = 0) {
     // The picture on screen is decoupled from the newest frame so a swipe can
     // slide the OLD window out and the NEW one in: `shown` is what we draw,
     // `offset` is its horizontal translation in px, `awaitingWin` is set while
@@ -331,6 +333,17 @@ fun MirrorView(frame: Link.Frame?, enabled: Boolean, onZoom: (Float) -> Unit = {
             p.x.coerceIn((1f - s) * widthPx, 0f),
             p.y.coerceIn((1f - s) * heightPx, 0f),
         )
+    // The tappable twin of the pinch: a TalkBack custom action steps the zoom.
+    var lastZoomRequest by remember { mutableStateOf(zoomRequest) }
+    LaunchedEffect(zoomRequest) {
+        if (zoomRequest != lastZoomRequest) {
+            val step = if (zoomRequest > lastZoomRequest) 1.5f else 1f / 1.5f
+            lastZoomRequest = zoomRequest
+            scale = (scale * step).coerceIn(1f, MIRROR_MAX_ZOOM).let { if (it < 1.12f) 1f else it }
+            pan = clampPan(pan, scale)
+            reportZoom(scale)
+        }
+    }
 
     fun zoomBy(zoom: Float, move: Offset, about: Offset) {
         val next = (scale * zoom).coerceIn(1f, MIRROR_MAX_ZOOM)

@@ -92,13 +92,15 @@ class ListenService : LifecycleService() {
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val n = Notification.Builder(this, AudioCaptureService.CHANNEL_ID)
-            .setContentTitle("Listening to the desktop")
-            .setContentText("Desktop audio is playing here.")
+        Notifications.ensureChannels(this)
+        val host = Names.host(Prefs.of(this).getString(Prefs.KEY_HOST, "") ?: "")
+        val n = Notification.Builder(this, Notifications.CH_LISTEN)
+            .setContentTitle(getString(R.string.notif_listening_to, host))
             .setSmallIcon(R.drawable.ic_stat_headphones)
+            .setColor(Notifications.accent)
             .setOngoing(true)
             .setContentIntent(open)
-            .addAction(Notification.Action.Builder(null, "Stop", stop).build())
+            .addAction(Notification.Action.Builder(null, getString(R.string.stop), stop).build())
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)

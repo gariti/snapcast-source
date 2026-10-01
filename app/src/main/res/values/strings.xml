@@ -6,23 +6,50 @@
     <string name="not_paired">not paired</string>
     <string name="not_linked">not linked</string>
     <string name="linked">Linked</string>
+    <string name="linked_again">Linked again</string>
     <string name="paused">paused</string>
+    <string name="not_answering">not answering</string>
+    <string name="not_answering_since">not answering · since %1$s</string>
     <string name="desktop_not_answering">%1$s is not answering</string>
-    <string name="desktop_not_answering_steps_1">Is the desktop awake and on the same network?</string>
-    <string name="desktop_not_answering_steps_2">The link comes back on its own; nothing to press.</string>
+    <string name="lost_step_1">Is it awake? A sleeping desktop drops the link.</string>
+    <string name="lost_step_2">Is this phone on the same network, or on Tailscale?</string>
+    <string name="lost_step_3">Still nothing? More › Link details shows where it stops.</string>
+    <string name="lost_footnote">Trying again by itself. The windows come back when it answers.</string>
+    <string name="last_answer">Last answer %1$s · trying again</string>
+    <string name="try_now">try now</string>
     <string name="no_window">No window</string>
     <string name="focus_something">focus something on the desktop</string>
     <string name="whole_display">every window on this display</string>
+    <string name="window_actions">%1$s, window actions</string>
+    <string name="back_to_window_a11y">%1$s, back to the window</string>
 
-    <!-- first run -->
+    <!-- first run and pairing -->
     <string name="pair_headline">Pair this phone with your desktop</string>
     <string name="pair_step_1">On the desktop, open the control panel › Network › Pair a phone.</string>
-    <string name="pair_step_2">Point this phone\'s camera at the code.</string>
+    <string name="pair_step_2">Point this phone\'s camera at the code, or scan it here.</string>
     <string name="pair_step_3">Approve the pairing on the desktop.</string>
     <string name="pair_footnote">No camera at hand? Type the code instead.</string>
     <string name="type_the_code">type the code</string>
     <string name="scan">scan</string>
-    <string name="hint_scan">the code on the desktop</string>
+    <string name="type_the_code_title">Type the code</string>
+    <string name="four_by_four">4 × 4</string>
+    <string name="code">Code</string>
+    <string name="code_help">It is under the QR on the desktop. This phone looks for the desktop on its own network.</string>
+    <string name="somewhere_else">Somewhere else?</string>
+    <string name="somewhere_else_meta">give the desktop\'s name or address</string>
+    <string name="address">Address</string>
+    <string name="address_placeholder">a name or an address</string>
+    <string name="connect">connect</string>
+    <string name="back_to_scan">back to scan</string>
+    <string name="looking_for_desktop">Looking for the desktop…</string>
+    <string name="no_desktop_knows_code">No desktop on this network knows that code.</string>
+    <string name="paired_with_x">Paired with %1$s</string>
+    <string name="desktop_did_not_answer">%1$s did not answer. Is it awake and on the same network?</string>
+    <string name="qr_verifying">Scanned · checking with the desktop…</string>
+    <string name="qr_paired">Paired with %1$s (%2$s)</string>
+    <string name="qr_no_answer">Code saved, but %1$s did not answer. Is it awake and on the same network?</string>
+    <string name="qr_no_host">Code saved. The code had no address; type one.</string>
+    <string name="qr_missing_code">That code is missing its pairing key; make a new one on the desktop.</string>
 
     <!-- the canvas card -->
     <string name="windows">Windows</string>
@@ -32,26 +59,26 @@
     <string name="hidden">hidden</string>
     <string name="terminal">terminal</string>
     <string name="close">close</string>
+    <string name="close_x">Close %1$s</string>
     <string name="tap_again_to_close">tap again to close</string>
     <string name="hint_tap">tap</string>
     <string name="hint_hold">hold</string>
     <string name="hint_swipe">⇆</string>
     <string name="hint_pinch">pinch</string>
     <string name="hint_drag">drag</string>
-    <string name="hint_click">click</string>
-    <string name="hint_right">right</string>
-    <string name="hint_window">window</string>
-    <string name="hint_zoom">zoom</string>
-    <string name="hint_scroll">scroll</string>
-    <string name="hint_follow">follow</string>
-    <string name="hint_size">size</string>
-    <string name="hint_resume">the pill to resume</string>
+    <string name="hint_right_click">right-click</string>
+    <string name="hint_history">history</string>
+    <string name="hint_pill_resume">pill to resume</string>
+    <string name="hint_back">back</string>
     <string name="hint_back_to_window">back to the window</string>
+    <string name="hint_back_to_more">back to More</string>
     <string name="paused_idle">paused after %1$s · tap to resume</string>
     <string name="paused_metered">paused on mobile data · allow it under More › Mirror</string>
     <string name="paused_by_you">paused by you · tap to resume</string>
     <string name="paused_status">Paused · the desktop\'s GPU is idle</string>
     <string name="waiting_first_frame">waiting for the first picture…</string>
+    <string name="frame_failed">the picture failed · trying again</string>
+    <string name="swipe_failed">the window did not answer</string>
     <string name="opening_session">Opening the session…</string>
     <string name="lines_back">↑ %1$d lines back · tap to follow</string>
     <string name="keys">keys</string>
@@ -60,24 +87,44 @@
     <string name="more">more</string>
     <string name="gestures">gestures</string>
     <string name="interrupt">tap again to interrupt</string>
+    <string name="fps">fps</string>
+    <string name="display_off">%1$s is off</string>
+    <string name="allow_notifications">Allow notifications</string>
+    <string name="allow_notifications_meta">so the desktop can ask for your fingerprint</string>
+    <string name="allow">allow</string>
+
+    <!-- TalkBack custom actions on the picture -->
+    <string name="act_next_window">Next window</string>
+    <string name="act_prev_window">Previous window</string>
+    <string name="act_right_click">Right-click the centre</string>
+    <string name="act_zoom_in">Zoom in</string>
+    <string name="act_zoom_out">Zoom out</string>
+    <string name="act_pause">Pause</string>
+    <string name="act_resume">Resume</string>
+    <string name="picture_of">Picture of %1$s</string>
 
     <!-- the gestures sheet -->
     <string name="gestures_title">Gestures</string>
-    <string name="g_tap">Tap</string>
-    <string name="g_tap_mirror">clicks where you tap</string>
-    <string name="g_double">Double tap</string>
-    <string name="g_double_mirror">double-click</string>
-    <string name="g_hold">Hold</string>
-    <string name="g_hold_mirror">right-click; move while holding to drag</string>
-    <string name="g_swipe">Swipe sideways</string>
-    <string name="g_swipe_mirror">the next or previous window</string>
-    <string name="g_pinch">Pinch</string>
-    <string name="g_pinch_mirror">zoom the picture; drag to look around</string>
-    <string name="g_drag_term">Drag up or down</string>
-    <string name="g_drag_term_t">scroll the terminal\'s history</string>
-    <string name="g_tap_term">Tap</string>
-    <string name="g_tap_term_t">follow the live end again</string>
-    <string name="g_pinch_term_t">text size</string>
+    <string name="gestures_caption">and the tap that does the same</string>
+    <string name="on_the_picture">On the picture</string>
+    <string name="on_a_terminal">On a terminal</string>
+    <string name="g_click">Click</string>
+    <string name="g_click_m">twice for a double-click</string>
+    <string name="g_right">Right-click</string>
+    <string name="g_right_m">or Keys › right</string>
+    <string name="g_hold_move">hold ↔</string>
+    <string name="g_drag">Drag</string>
+    <string name="g_drag_m">hold still, then move</string>
+    <string name="g_next">Next window</string>
+    <string name="g_next_m">or a row under Windows</string>
+    <string name="g_zoom">Zoom</string>
+    <string name="g_zoom_m">two fingers pan</string>
+    <string name="g_swipe_title">⇆ title</string>
+    <string name="g_next_web_m">on a web page</string>
+    <string name="g_history">History</string>
+    <string name="g_history_m">down goes back · tap for now</string>
+    <string name="g_text_size">Text size</string>
+    <string name="g_text_size_m">kept for next time</string>
 
     <!-- the window card -->
     <string name="window">Window</string>
@@ -96,7 +143,7 @@
     <string name="next_width">Next width</string>
     <string name="next_width_meta">⅓ · ½ · ⅔</string>
     <string name="move">Move</string>
-    <string name="move_meta">left · right · up · down · to another display</string>
+    <string name="move_meta">sideways · up · down · to a display</string>
     <string name="move_left">Left</string>
     <string name="move_right">Right</string>
     <string name="move_up">Up a workspace</string>
@@ -105,7 +152,6 @@
     <string name="hide">Hide</string>
     <string name="hide_meta">More › Hidden windows brings it back</string>
     <string name="show_window">Show</string>
-    <string name="hint_does_it">does it</string>
     <string name="pause">pause</string>
     <string name="resume">resume</string>
 
@@ -119,49 +165,72 @@
     <string name="middle">middle</string>
     <string name="right">right</string>
     <string name="next_key_latch">next key gets the latch</string>
-    <string name="latch_next">+ the next key</string>
-    <string name="type_">type</string>
+    <string name="latch_next">+ next key</string>
     <string name="type_placeholder">every key goes straight through</string>
-    <string name="more_keys">more…</string>
-    <string name="fewer_keys">fewer</string>
+    <string name="letters">A–Z</string>
+    <string name="tap_to_type">tap to type</string>
+    <string name="type_with_keyboard">Type with the phone keyboard</string>
+    <string name="f_keys">F1–12</string>
+    <string name="k_esc">Esc</string>
+    <string name="k_tab">Tab</string>
+    <string name="k_shift_tab">Shift Tab</string>
+    <string name="k_shift">Shift</string>
+    <string name="k_ctrl">Ctrl</string>
+    <string name="k_super">Super</string>
+    <string name="k_alt">Alt</string>
+    <string name="k_space">Space</string>
+    <string name="k_backspace">Backspace</string>
+    <string name="k_enter">Enter</string>
+    <string name="k_ins">Ins</string>
+    <string name="k_home">Home</string>
+    <string name="k_pgup">PgUp</string>
+    <string name="k_del">Del</string>
+    <string name="k_end">End</string>
+    <string name="k_pgdn">PgDn</string>
+    <string name="k_up">Up</string>
+    <string name="k_down">Down</string>
+    <string name="k_left">Left</string>
+    <string name="k_right">Right</string>
+    <string name="k_interrupt">Control C, interrupt</string>
 
     <!-- the ears card -->
     <string name="ears_title">Ears</string>
     <string name="hear">Hear</string>
     <string name="phone_speaker">Phone speaker</string>
-    <string name="headset_meta">the desktop\'s bar shows this too</string>
+    <string name="battery_pct">battery %1$d %%</string>
+    <string name="headset_meta">on the desktop\'s bar too</string>
     <string name="listen">Listen to the desktop</string>
     <string name="listen_meta">plays here, half a second behind</string>
     <string name="listen_needs_link">needs the desktop</string>
     <string name="allow_bluetooth">Allow Bluetooth</string>
-    <string name="allow_bluetooth_meta">to show the headset\'s name and battery</string>
+    <string name="allow_bluetooth_meta">to show the headset\'s name</string>
     <string name="on">on</string>
     <string name="off">off</string>
     <string name="send_audio">Send this phone\'s audio</string>
     <string name="to_speakers">to the speakers</string>
     <string name="to_visualizer">to the visualizer</string>
-    <string name="speaker_slot">Speaker</string>
     <string name="not_sending">Not sending</string>
+    <string name="slot_picked">the speakers pick a free slot for you</string>
     <string name="connecting">Connecting…</string>
     <string name="sending">Sending</string>
-    <string name="sending_silent">Sending · nothing is playing</string>
+    <string name="nothing_playing">Nothing is playing on the phone</string>
     <string name="reconnecting">Reconnecting…</string>
-    <string name="could_not_connect">Could not connect</string>
+    <string name="could_not_reach_speakers">Could not reach the speakers</string>
     <string name="start">start</string>
     <string name="stop">stop</string>
-    <string name="hint_start_record">Android asks to record the screen · that is the audio</string>
+    <string name="record_screen_note">Android calls this recording the screen. Only the sound is sent.</string>
 
     <!-- the more card -->
     <string name="more_title">More</string>
+    <string name="more_desktop">More › Desktop</string>
     <string name="paired_with">paired with %1$s</string>
     <string name="desktop">Desktop</string>
-    <string name="desktop_meta_linked">linked · answers your fingerprint</string>
+    <string name="desktop_meta_linked">linked · your fingerprint answers it</string>
     <string name="desktop_meta_linked_nokey">linked</string>
     <string name="desktop_meta_down">not answering</string>
     <string name="mirror_section">Mirror</string>
     <string name="frame_rate">Frame rate</string>
-    <string name="frame_rate_meta">2 is enough to read · 8 costs the desktop\'s GPU</string>
-    <string name="fps">fps</string>
+    <string name="frame_rate_meta">2 is enough · 8 costs the GPU</string>
     <string name="pause_when_idle">Pause when idle</string>
     <string name="pause_when_idle_meta">after no touch for</string>
     <string name="never">never</string>
@@ -173,8 +242,6 @@
     <string name="music_detection_meta_off">off · needs Notification access</string>
     <string name="hidden_windows">Hidden windows</string>
     <string name="none">none</string>
-    <string name="speakers">Speakers</string>
-    <string name="speakers_meta">the house speakers, muted or not</string>
     <string name="link_details">Link details</string>
     <string name="link_details_meta">for troubleshooting</string>
     <string name="hint_tap_chip">a chip to change it</string>
@@ -182,43 +249,34 @@
     <string name="tap_again_to_unpair">tap again to unpair</string>
 
     <!-- more › desktop -->
-    <string name="pairing">Pairing</string>
-    <string name="code">Code</string>
-    <string name="code_placeholder">the code from the desktop</string>
-    <string name="address">Address</string>
-    <string name="address_placeholder">a name or an address</string>
-    <string name="find_desktop">find</string>
-    <string name="searching">Searching…</string>
-    <string name="enter_code_first">Type the pairing code first.</string>
-    <string name="no_desktop_found">No Lattice desktop found on this network.</string>
-    <string name="paired_at">Paired with %1$s</string>
-    <string name="code_mismatch">Found a desktop, but the code did not match. Check it on the desktop.</string>
-    <string name="qr_verifying">Scanned · checking with the desktop…</string>
-    <string name="qr_paired">Paired with %1$s (%2$s)</string>
-    <string name="qr_no_answer">Code saved, but %1$s did not answer. Is it awake and on the same network?</string>
-    <string name="qr_no_host">Code saved. The code had no address; type one.</string>
-    <string name="qr_missing_code">That code is missing its pairing key; make a new one on the desktop.</string>
+    <string name="link">Link</string>
+    <string name="same_network">same network</string>
+    <string name="on_tailscale">on Tailscale</string>
+    <string name="since">since %1$s</string>
     <string name="fingerprint">Fingerprint</string>
-    <string name="fingerprint_meta">answers the desktop\'s unlock, administrator and permission prompts</string>
-    <string name="key_none">no key yet</string>
-    <string name="key_pending">waiting for the desktop to trust it</string>
-    <string name="key_trusted">trusted · %1$s</string>
-    <string name="key_revoked">revoked by the desktop</string>
-    <string name="key_invalidated">a fingerprint was added on the phone · enrol again</string>
-    <string name="key_hardware_strongbox">in the phone\'s secure chip</string>
-    <string name="key_hardware_tee">in the phone\'s secure hardware</string>
-    <string name="enrol">Enrol this phone</string>
-    <string name="enrol_again">Enrol a new key</string>
-    <string name="enrol_meta_pending">then on the desktop: run phone-auth enroll and touch the sensor</string>
-    <string name="enrol_meta_unlinked">needs the desktop</string>
-    <string name="enrol_meta_noauth">this desktop does not do fingerprints yet</string>
-    <string name="forget_key">forget key</string>
-    <string name="tap_again_to_forget">tap again to forget</string>
+    <string name="key_trusted">Key trusted</string>
+    <string name="key_trusted_meta">kept in this phone\'s security chip</string>
+    <string name="key_waiting">Waiting for the desktop</string>
+    <string name="key_waiting_meta">touch its sensor to trust this phone</string>
+    <string name="key_setup">Set up the key</string>
+    <string name="key_setup_meta">your fingerprint answers the desktop\'s unlock, administrator and permission prompts</string>
+    <string name="key_setup_unlinked">needs the desktop</string>
+    <string name="key_setup_noauth">this desktop does not do fingerprints yet</string>
+    <string name="key_invalidated">A fingerprint was added on this phone. Set up the key again.</string>
+    <string name="key_revoked">The desktop forgot this key. Set it up again.</string>
+    <string name="forget_the_key">Forget the key</string>
+    <string name="forget_the_key_meta">the desktop stops asking</string>
+    <string name="forget">forget</string>
+    <string name="tap_again">tap again</string>
+    <string name="pairing">Pairing</string>
+    <string name="pair_again">Pair again</string>
+    <string name="pair_again_meta">scan a new code from the desktop</string>
+    <string name="type_a_code">Type a code</string>
+    <string name="type_a_code_meta">or give the desktop\'s address</string>
 
     <!-- more › music -->
     <string name="music_headline">Tell the desktop when music plays</string>
     <string name="music_body">With Notification access, the phone can see music playing through a cast target (a KEF, a Chromecast, AirPlay) and the desktop\'s visualizer follows it.</string>
-    <string name="open_notification_access">allow</string>
     <string name="music_playing">Playing · %1$d</string>
     <string name="music_listening">Listening · nothing playing</string>
     <string name="music_not_running">Not running</string>
@@ -234,12 +292,28 @@
     <string name="up">up</string>
     <string name="down">down</string>
 
-    <!-- more › speakers -->
-    <string name="muted">muted</string>
-    <string name="audible">audible</string>
-    <string name="refresh">refresh</string>
-    <string name="no_speakers">No speakers answered.</string>
-    <string name="speakers_error">Could not reach the speakers.</string>
+    <!-- say -->
+    <string name="say_title">Say</string>
+    <string name="into_x">into %1$s</string>
+    <string name="into_the_desktop">into the desktop</string>
+    <string name="listening">Listening</string>
+    <string name="say_status">When you stop, the words are typed where the desktop\'s cursor is.</string>
+    <string name="discard">discard</string>
+    <string name="type_it">type it</string>
+    <string name="working_out_words">Working out the words…</string>
+    <string name="typed_quote">Typed · “%1$s”</string>
+    <string name="could_not_hear">Could not hear anything. Try again closer to the phone.</string>
+    <string name="say_needs_mic">Say needs the microphone</string>
+    <string name="tile_listening">listening · tap to type it</string>
+    <string name="typed_into">Typed into %1$s</string>
+    <string name="undo">undo</string>
+
+    <!-- web -->
+    <string name="page_label">Page</string>
+    <string name="signed_out_here">Signed out here · this phone keeps its own logins</string>
+    <string name="reload">reload</string>
+    <string name="open_on_desktop">open on the desktop</string>
+    <string name="page_did_not_load">The page did not load. Open it on the desktop instead?</string>
 
     <!-- desktop asks -->
     <string name="asks">%1$s asks</string>
@@ -254,15 +328,29 @@
     <string name="deny">deny</string>
     <string name="approve">approve</string>
     <string name="tap_again_to_deny">tap again to deny</string>
-    <string name="hint_touch_approves">approves</string>
-    <string name="hint_back_leaves">leaves it unanswered</string>
-    <string name="auth_err_invalidated">a fingerprint was added on the phone · enrol again under More › Desktop</string>
-    <string name="auth_err_nokey">no key on this phone: %1$s</string>
-    <string name="auth_err_sign">could not sign: %1$s</string>
+    <string name="hint_dont_answer">don\'t answer</string>
+    <string name="auth_err_not_read">The fingerprint was not read. Touch the sensor again.</string>
+    <string name="auth_err_invalidated">A fingerprint was added on this phone. Set up the key again in More › Desktop.</string>
+    <string name="auth_err_nokey">No key on this phone yet. Set it up in More › Desktop.</string>
+    <string name="auth_err_sign">Could not sign: %1$s</string>
+    <string name="auth_withdrawn">The desktop withdrew the request</string>
+    <string name="auth_timed_out">Timed out</string>
     <string name="cancel">Cancel</string>
 
     <!-- notifications -->
     <string name="notif_asks">%1$s asks for your fingerprint</string>
     <string name="notif_channel_asks">Desktop asks</string>
     <string name="notif_channel_asks_desc">The desktop asks for your fingerprint: unlock, administrator, permissions.</string>
+    <string name="notif_channel_link">Link</string>
+    <string name="notif_channel_link_desc">Whether the desktop is answering, and the window on the phone.</string>
+    <string name="notif_channel_say">Say</string>
+    <string name="notif_channel_listen">Listen</string>
+    <string name="notif_channel_send">Send</string>
+    <string name="notif_linked_to">Linked to %1$s</string>
+    <string name="notif_window_on_phone">%1$s is on the phone · %2$d fps</string>
+    <string name="notif_not_answering">%1$s is not answering</string>
+    <string name="notif_sending">Sending this phone\'s sound</string>
+    <string name="notif_listening_to">Listening to %1$s</string>
+    <string name="notif_say_listening">Say · listening</string>
+    <string name="notif_say_body">Tap “type it” when you are done.</string>
 </resources>

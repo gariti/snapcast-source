@@ -20,6 +20,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
@@ -124,6 +125,20 @@ class DictationService : LifecycleService() {
         job?.cancel()
         job = null
         if (wasRecording) Link.dict(if (cancel) "cancel" else "stop")
+        // The words arrive later, on `dictr`. With the app in front the canvas
+        // shows them; otherwise a notification does, with undo.
+        if (wasRecording && !cancel) {
+            val app = applicationContext
+            val window = Link.desk.value.focused?.let { Names.windowTitle(it) } ?: getString(R.string.into_the_desktop)
+            resultScope.launch {
+                val d = kotlinx.coroutines.withTimeoutOrNull(60_000) {
+                    Link.dict.first { it is Link.DictState.Done || it is Link.DictState.Failed }
+                }
+                if (d is Link.DictState.Done && !MainActivity.foreground && d.text.isNotBlank()) {
+                    Notifications.sayResult(app, window, d.text)
+                }
+            }
+        }
         _active.value = false
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -148,14 +163,16 @@ class DictationService : LifecycleService() {
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val n = Notification.Builder(this, AudioCaptureService.CHANNEL_ID)
-            .setContentTitle("Dictating to the desktop")
-            .setContentText("Tap Done to transcribe and type it.")
+        Notifications.ensureChannels(this)
+        val n = Notification.Builder(this, Notifications.CH_SAY)
+            .setContentTitle(getString(R.string.notif_say_listening))
+            .setContentText(getString(R.string.notif_say_body))
             .setSmallIcon(R.drawable.ic_stat_mic)
+            .setColor(Notifications.accent)
             .setOngoing(true)
             .setContentIntent(open)
-            .addAction(Notification.Action.Builder(null, "Done", stop).build())
-            .addAction(Notification.Action.Builder(null, "Discard", cancel).build())
+            .addAction(Notification.Action.Builder(null, getString(R.string.type_it), stop).build())
+            .addAction(Notification.Action.Builder(null, getString(R.string.discard), cancel).build())
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
@@ -175,6 +192,7 @@ class DictationService : LifecycleService() {
         private const val FRAME_BYTES = RATE / 10 * 2
         private const val MAX_MS = 300_000L
 
+        private val resultScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
         private val _active = MutableStateFlow(false)
         /** True while the microphone is open. */
         val active: StateFlow<Boolean> = _active.asStateFlow()

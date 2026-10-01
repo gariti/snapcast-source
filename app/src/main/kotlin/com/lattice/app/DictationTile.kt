@@ -55,16 +55,16 @@ class DictationTile : TileService() {
 
     private fun render(active: Boolean, ready: Boolean) {
         val tile = qsTile ?: return
-        tile.label = "Dictate"
+        tile.label = getString(R.string.say_title)
         tile.state = when {
             !ready -> Tile.STATE_UNAVAILABLE
             active -> Tile.STATE_ACTIVE
             else -> Tile.STATE_INACTIVE
         }
         tile.subtitle = when {
-            !ready -> "desktop offline"
-            active -> "listening — tap to type"
-            else -> "to the desktop"
+            !ready -> getString(R.string.notif_not_answering, Names.host(Prefs.of(this).getString(Prefs.KEY_HOST, "") ?: ""))
+            active -> getString(R.string.tile_listening)
+            else -> getString(R.string.into_the_desktop)
         }
         tile.updateTile()
     }

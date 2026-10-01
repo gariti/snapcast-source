@@ -1,20 +1,11 @@
 package com.lattice.app
 
-import android.Manifest
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.provider.MediaStore
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -28,31 +19,43 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.core.content.ContextCompat
+import androidx.compose.ui.semantics.CollectionInfo
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.collectionInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import com.lattice.app.lx.ButtonKind
 import com.lattice.app.lx.Hint
 import com.lattice.app.lx.LxButton
@@ -60,98 +63,97 @@ import com.lattice.app.lx.LxCaption
 import com.lattice.app.lx.LxCard
 import com.lattice.app.lx.LxDivider
 import com.lattice.app.lx.LxEmptyState
+import com.lattice.app.lx.LxField
 import com.lattice.app.lx.LxHints
+import com.lattice.app.lx.LxKey
 import com.lattice.app.lx.LxRow
 import com.lattice.app.lx.LxSection
 import com.lattice.app.lx.LxSectionGap
 import com.lattice.app.lx.LxStage
 import com.lattice.app.lx.LxStatus
 import com.lattice.app.lx.LxTheme
+import com.lattice.app.lx.LxTitleDoor
 import com.lattice.app.lx.LxWordmark
 import com.lattice.app.lx.Marker
 import com.lattice.app.lx.StatusTone
 import com.lattice.app.lx.rememberArm
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.json.JSONObject
+import java.text.DateFormat
+import java.util.Date
+import kotlin.math.abs
 
 /**
  * What the canvas is showing. Hoisted out of the canvas itself because the
- * band, the Window card and the Keys card all need to read it — the Keys card
- * in particular has to know whether it is typing at a tmux pane or at the
- * compositor.
+ * band, the Window card and the Keys card all need to read it.
  */
 class CanvasPrefs {
-    /** Whole output rather than the focused window. */
     var wholeOutput by mutableStateOf(false)
-    /** Which output, while `wholeOutput`. */
     var output by mutableStateOf<String?>(null)
-    /** The user's live/paused switch. */
     var mirrorOn by mutableStateOf(true)
-    /** An agent session the user asked to see as a picture instead of text. */
     var mirrorFor by mutableStateOf<String?>(null)
-    /** A web page the user asked to see as a picture instead of a real page. */
     var mirrorForWeb by mutableStateOf<String?>(null)
 }
 
 /** The second card on the stage, if any. */
-enum class Sheet { Window, Keys, Ears, More, Gestures }
+enum class Sheet { Window, Keys, Say, Ears, More, Gestures }
 
 /** A page inside the More card. */
-enum class MorePage { Desktop, Music, Hidden, Speakers, Link }
+enum class MorePage { Desktop, Music, Hidden, Link }
 
 /**
  * The app: a STAGE with one card — the window the desktop has focused — and,
- * when you ask for one, a second card that rises under it. There is no rail
- * and no tab bar: the canvas card's own bands hold every command, and the
- * canvas swipes between windows.
- *
- * This is the desktop's own shape (a Card App: band · tile · band, cards on
- * the blurred wallpaper), on a phone.
+ * when you ask for one, a second card that rises under it. No rail, no tab
+ * bar: the canvas card's own bands hold every command, the canvas swipes
+ * between windows. The desktop's own shape (a Card App), on a phone.
  */
 @Composable
 fun LatticeApp(app: AppState) {
+    val ctx = LocalContext.current
     val prefs = remember { CanvasPrefs() }
     val desk by Link.desk.collectAsState()
     val client by Link.client.collectAsState()
     val linkState by (client?.state ?: remember { MutableStateFlow(ControlChannelClient.LinkState.Disconnected) }).collectAsState()
     val bridgeUp by (client?.bridgeUp ?: remember { MutableStateFlow(false) }).collectAsState()
     val dict by Link.dict.collectAsState()
-    val snap = rememberSnapcastState(app.host)
 
     var sheet by rememberSaveable { mutableStateOf<Sheet?>(null) }
     var morePage by rememberSaveable { mutableStateOf<MorePage?>(null) }
-    // Esc unwinds one level: a page, then the card.
     BackHandler(enabled = sheet != null) {
         if (sheet == Sheet.More && morePage != null) morePage = null else sheet = null
     }
 
+    // ONE meaning of "linked": every surface gates on this.
     val ready = bridgeUp &&
         (linkState as? ControlChannelClient.LinkState.Connected)?.proto?.let { it >= 2 } == true
-    val linkUp = linkState is ControlChannelClient.LinkState.Connected
     val focused = desk.focused
 
-    // A dispatched agent's terminal is a `tmux-attach-<session>` window; on one
-    // of those the canvas reads the pane as text instead of mirroring a picture
-    // of it. Computed here rather than in the canvas because the Keys card
-    // routes its keystrokes by the same answer.
+    // When the link last came up, and when it last went — for "since 8:14".
+    var linkedSince by remember { mutableLongStateOf(0L) }
+    var lostSince by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(ready) {
+        val now = System.currentTimeMillis()
+        if (ready) linkedSince = now else lostSince = now
+    }
+
     val agentSession = focused?.app
         ?.takeIf { it.startsWith(AGENT_APP_PREFIX) }
         ?.removePrefix(AGENT_APP_PREFIX)
         ?.takeIf { it.isNotEmpty() }
     val termMode = agentSession != null && !prefs.wholeOutput && prefs.mirrorFor != agentSession
-
-    // And a browser window is a page: render it here instead of watching a
-    // JPEG of it. The two are disjoint by construction (an agent terminal is
-    // a `foot` window, a page is a browser one), so `termMode` wins any tie.
     val webPage = if (termMode) null else webPageFor(focused)
     val webMode = webPage != null && !prefs.wholeOutput && prefs.mirrorForWeb != webPage.url
     var webTitle by remember { mutableStateOf<String?>(null) }
+    val web = rememberWebController()
 
-    // Dictation outcomes surface on the canvas card's status line, briefly.
+    // A Say result lands on the canvas card's status line for 4 s.
     var notice by remember { mutableStateOf<Pair<String, StatusTone>?>(null) }
+    val typedQuote = stringResource(R.string.typed_quote)
+    val couldNotHear = stringResource(R.string.could_not_hear)
     LaunchedEffect(dict) {
         when (val d = dict) {
-            is Link.DictState.Done -> { notice = "Typed: " + d.text.take(80) to StatusTone.Ok; Link.clearDict() }
-            is Link.DictState.Failed -> { notice = "Could not dictate: " + d.reason to StatusTone.Error; Link.clearDict() }
+            is Link.DictState.Done -> { notice = typedQuote.format(d.text.take(60)) to StatusTone.Ok; Link.clearDict() }
+            is Link.DictState.Failed -> { notice = couldNotHear to StatusTone.Error; Link.clearDict() }
             else -> {}
         }
     }
@@ -163,8 +165,7 @@ fun LatticeApp(app: AppState) {
         Modifier
             .fillMaxSize()
             // Every touch anywhere counts as "using it", so the mirror's idle
-            // timer only fires when the phone really is idle. Initial pass and
-            // never consuming, so no child gesture is disturbed.
+            // timer only fires when the phone really is idle.
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
@@ -177,37 +178,35 @@ fun LatticeApp(app: AppState) {
         LxStage(
             Modifier
                 .windowInsetsPadding(WindowInsets.statusBars)
-                // The IME inset already subsumes the navigation bar, so union
-                // them: padding both would double-count under a keyboard.
                 .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         ) {
-            if (!paired) {
-                FirstRunCard(
-                    modifier = Modifier.weight(1f),
-                    onTypeCode = { sheet = Sheet.More; morePage = MorePage.Desktop },
+            when {
+                !paired -> FirstRunCard(app, Modifier.weight(1f))
+                !ready && sheet != Sheet.More -> LinkLostCard(
+                    app = app, since = lostSince, modifier = Modifier.weight(1f),
+                    onMore = { sheet = Sheet.More; morePage = null },
                 )
-                // The first run has one way in to More › Desktop and nothing
-                // else: the rest of the stage is empty until the phone is paired.
-            } else {
-                val shrunk = sheet != null
-                CanvasCard(
-                    app = app, prefs = prefs, desk = desk, ready = ready, linkUp = linkUp,
-                    agentSession = agentSession, termMode = termMode, webPage = webPage, webMode = webMode,
-                    webTitle = webTitle, onWebTitle = { webTitle = it },
-                    sheet = sheet, onSheet = { s -> sheet = if (sheet == s) null else s; if (s != Sheet.More) morePage = null },
-                    onCollapse = { sheet = null; morePage = null },
-                    shrunk = shrunk, notice = notice,
-                    modifier = if (shrunk) Modifier else Modifier.weight(1f),
-                )
+                else -> {
+                    val shrunk = sheet != null
+                    CanvasCard(
+                        app = app, prefs = prefs, desk = desk, ready = ready, web = web,
+                        agentSession = agentSession, termMode = termMode, webPage = webPage, webMode = webMode,
+                        webTitle = webTitle, onWebTitle = { webTitle = it },
+                        sheet = sheet,
+                        onSheet = { s -> sheet = if (sheet == s) null else s; if (s != Sheet.More) morePage = null },
+                        onCollapse = { sheet = null; morePage = null },
+                        shrunk = shrunk, notice = notice,
+                        modifier = if (shrunk) Modifier else Modifier.weight(1f),
+                    )
+                }
             }
 
-            // The second card. Rendered for the LAST sheet asked for so the
-            // slide-out animates a full card, never an empty box — a hard cut,
-            // which this app does not do.
+            // The second card, rendered for the LAST sheet asked for so the
+            // slide-out animates a full card, never an empty box.
             var shown by remember { mutableStateOf(Sheet.Window) }
             LaunchedEffect(sheet) { if (sheet != null) shown = sheet!! }
-            val rise by animateFloatAsState(if (sheet != null) 1f else 0f, tween(LxTheme.current.fast), label = "rise")
-            if (sheet != null || rise > 0.01f) {
+            val rise by animateFloatAsState(if (sheet != null && paired) 1f else 0f, tween(LxTheme.current.fast), label = "rise")
+            if (paired && (sheet != null || rise > 0.01f)) {
                 val lx = LxTheme.current
                 val travel = with(LocalDensity.current) { lx.u(2f).toPx() }
                 Box(Modifier.weight(1f).fillMaxWidth().graphicsLayer { alpha = rise; translationY = (1f - rise) * travel }) {
@@ -218,9 +217,10 @@ fun LatticeApp(app: AppState) {
                             onDone = { Link.requestDesk() },
                         )
                         Sheet.Keys -> KeysCard(ready = ready, termMode = termMode, focused = focused)
+                        Sheet.Say -> SayCard(ready = ready, focused = focused, onDone = { if (sheet == Sheet.Say) sheet = null })
                         Sheet.Ears -> EarsCard(app = app, ready = ready)
-                        Sheet.More -> MoreCard(app = app, snap = snap, desk = desk, page = morePage, onPage = { morePage = it })
-                        Sheet.Gestures -> GesturesCard(termMode = termMode, webMode = webMode)
+                        Sheet.More -> MoreCard(app = app, desk = desk, linkedSince = linkedSince, page = morePage, onPage = { morePage = it })
+                        Sheet.Gestures -> GesturesCard()
                     }
                 }
             }
@@ -228,12 +228,16 @@ fun LatticeApp(app: AppState) {
     }
 }
 
+/** Focus the next or previous window on the desktop: the swipe's verb, and its tappable twin. */
+private fun focusNeighbour(dir: Int) {
+    Link.act(JSONObject().put(if (dir < 0) "FocusWindowDownOrColumnRight" else "FocusWindowUpOrColumnLeft", JSONObject()))
+}
+
 /**
- * The canvas card: what the desktop has focused, as a card. The top band is
- * the window's name and the four commands (keys · say · ears · more); the tile
- * is the picture, the text or the page, and under the picture the other
- * windows on the workspace; the bottom band is `?`, the surface's own
- * gestures, and close.
+ * The canvas card: what the desktop has focused. The top band is the window's
+ * name (the Window card's door) and the four commands (keys · say · ears ·
+ * more); the tile is the picture, the text or the page, with the other
+ * windows under it; the bottom band is `?`, ONE hint, and close.
  */
 @Composable
 private fun CanvasCard(
@@ -241,7 +245,7 @@ private fun CanvasCard(
     prefs: CanvasPrefs,
     desk: Link.Desk,
     ready: Boolean,
-    linkUp: Boolean,
+    web: WebController,
     agentSession: String?,
     termMode: Boolean,
     webPage: WebPage?,
@@ -267,73 +271,95 @@ private fun CanvasCard(
         webMode && webTitle != null -> webTitle
         else -> Names.windowTitle(focused)
     }
+    // The caption is workspace · fps only: short enough never to truncate.
     val caption = when {
         prefs.wholeOutput -> stringResource(R.string.whole_display)
-        focused == null -> if (linkUp) stringResource(R.string.focus_something) else stringResource(R.string.not_linked)
+        focused == null -> stringResource(R.string.focus_something)
+        termMode -> "${stringResource(R.string.agent_session)} · ${(app.termZoom * 100).toInt()} %"
+        webMode -> listOfNotNull(stringResource(R.string.web_page), Names.workspace(ws)).joinToString(" · ")
         else -> listOfNotNull(
-            Names.windowKind(focused),
             Names.workspace(ws),
-            focused.output.ifBlank { null }?.let { Names.display(it, desk.outputs) },
-            if (termMode) stringResource(R.string.terminal) else null,
-            if (!prefs.mirrorOn) stringResource(R.string.paused) else if (!termMode && !webMode) "${app.mirrorFps} ${stringResource(R.string.fps)}" else null,
+            if (!prefs.mirrorOn) stringResource(R.string.paused) else "${app.mirrorFps} ${stringResource(R.string.fps)}",
         ).joinToString(" · ")
     }
 
-    val hints: List<Hint> = when {
-        shrunk -> listOf(Hint("◀", stringResource(R.string.hint_back_to_window)))
-        !prefs.mirrorOn -> listOf(Hint(stringResource(R.string.hint_tap), stringResource(R.string.hint_resume)), Hint(stringResource(R.string.hint_swipe), stringResource(R.string.hint_window)))
-        termMode -> listOf(
-            Hint(stringResource(R.string.hint_drag), stringResource(R.string.hint_scroll)),
-            Hint(stringResource(R.string.hint_tap), stringResource(R.string.hint_follow)),
-            Hint(stringResource(R.string.hint_pinch), stringResource(R.string.hint_size)),
-            Hint(stringResource(R.string.hint_swipe), stringResource(R.string.hint_window)),
-        )
-        webMode -> listOf(Hint("◀", "back in the page"))
-        else -> listOf(
-            Hint(stringResource(R.string.hint_tap), stringResource(R.string.hint_click)),
-            Hint(stringResource(R.string.hint_hold), stringResource(R.string.hint_right)),
-            Hint(stringResource(R.string.hint_swipe), stringResource(R.string.hint_window)),
-            Hint(stringResource(R.string.hint_pinch), stringResource(R.string.hint_zoom)),
-        )
+    // ONE hint: the least guessable gesture on this surface.
+    val hint: Hint? = when {
+        closeArm.armed -> Hint(stringResource(R.string.hint_tap), stringResource(R.string.tap_again_to_close))
+        !prefs.mirrorOn && !termMode && !webMode -> Hint(stringResource(R.string.hint_tap), stringResource(R.string.hint_pill_resume))
+        termMode -> Hint(stringResource(R.string.hint_drag), stringResource(R.string.hint_history))
+        webMode -> null
+        else -> Hint(stringResource(R.string.hint_hold), stringResource(R.string.hint_right_click))
     }
 
-    // The terminal's keyboard sink: opened only from the strip's keyboard cap.
     var termKeyboard by remember { mutableStateOf(false) }
     LaunchedEffect(termMode) { if (!termMode) termKeyboard = false }
+
+    // Web: "signed out here", once per site.
+    val seenSites = remember { mutableSetOf<String>() }
+    val site = webPage?.url?.let { runCatching { java.net.URI(it).host }.getOrNull() }
+    var signedOutNote by remember { mutableStateOf(false) }
+    LaunchedEffect(site, webMode) { signedOutNote = webMode && site != null && seenSites.add(site) }
+
+    // TalkBack's custom actions on the picture: every gesture's tappable twin.
+    val aNext = stringResource(R.string.act_next_window); val aPrev = stringResource(R.string.act_prev_window)
+    val aRight = stringResource(R.string.act_right_click); val aIn = stringResource(R.string.act_zoom_in); val aOut = stringResource(R.string.act_zoom_out)
+    val aPause = stringResource(R.string.act_pause); val aResume = stringResource(R.string.act_resume)
+    var zoomRequest by remember { mutableStateOf(0) }
+    val pictureActions = listOf(
+        CustomAccessibilityAction(aNext) { focusNeighbour(-1); true },
+        CustomAccessibilityAction(aPrev) { focusNeighbour(1); true },
+        CustomAccessibilityAction(aRight) { Link.pointerIn(0.5f, 0.5f); Link.click("right"); true },
+        CustomAccessibilityAction(aIn) { zoomRequest++; true },
+        CustomAccessibilityAction(aOut) { zoomRequest--; true },
+        CustomAccessibilityAction(if (prefs.mirrorOn) aPause else aResume) { prefs.mirrorOn = !prefs.mirrorOn; true },
+    )
+    val pictureName = stringResource(R.string.picture_of, title)
 
     LxCard(
         modifier = modifier,
         active = !shrunk,
         top = {
-            // The window's name is the way in to everything about it.
-            Column(
-                Modifier.weight(1f)
-                    .clip(RoundedCornerShape(lx.radiusRow))
-                    .clickable(role = Role.Button, onClickLabel = stringResource(R.string.window)) { if (shrunk) onCollapse() else onSheet(Sheet.Window) }
-                    .padding(horizontal = lx.u(0.3f), vertical = lx.u(0.2f)),
-            ) {
-                LxWordmark(title)
-                LxCaption(caption)
-            }
+            LxTitleDoor(
+                title = title, caption = caption, unfold = !shrunk,
+                contentDescription = if (shrunk) stringResource(R.string.back_to_window_a11y, title) else stringResource(R.string.window_actions, title),
+                // On a page the picture owns its swipes, so ⇆ window is the title.
+                modifier = if (webMode && !shrunk) Modifier.pointerInput(Unit) {
+                    var dx = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { dx = 0f },
+                        onDragEnd = { if (abs(dx) > 72.dp.toPx()) focusNeighbour(if (dx < 0) -1 else 1) },
+                        onHorizontalDrag = { _, d -> dx += d },
+                    )
+                } else Modifier,
+            ) { if (shrunk) onCollapse() else onSheet(Sheet.Window) }
             LxButton(null, icon = Icons.Filled.Keyboard, pressed = sheet == Sheet.Keys, contentDescription = stringResource(R.string.keys)) { onSheet(Sheet.Keys) }
-            SayButton(ready = ready)
+            LxButton(null, icon = Icons.Filled.Mic, pressed = sheet == Sheet.Say, contentDescription = stringResource(R.string.say)) { onSheet(Sheet.Say) }
             LxButton(null, icon = Icons.Filled.Headphones, pressed = sheet == Sheet.Ears, contentDescription = stringResource(R.string.ears)) { onSheet(Sheet.Ears) }
             LxButton(null, icon = Icons.Filled.Tune, pressed = sheet == Sheet.More, contentDescription = stringResource(R.string.more)) { onSheet(Sheet.More) }
         },
         tilePadding = if (shrunk) lx.u(0.5f) else lx.inset,
         tile = {
-            // The surface: the picture, the text or the page. Never taken out
-            // of the composition to show something else — its effects run the
-            // mirror and the terminal, and a sheet draws under it, not instead.
+            if (webMode && webPage != null && !shrunk) {
+                // The page's address, as a field: tap to type another.
+                var editing by remember { mutableStateOf<String?>(null) }
+                LxField(
+                    stringResource(R.string.page_label), editing ?: prettyUrl(web.current.ifBlank { webPage.url }),
+                    { editing = it }, enabled = ready,
+                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri,
+                )
+                LaunchedEffect(editing) { /* committed by the keyboard's Go in a later pass; a typed URL loads on blur */ }
+                Spacer(Modifier.height(lx.u(0.5f)))
+            }
             val surfaceModifier = when {
-                // Shrunk under a sheet: a tap on the sliver brings the window back.
                 shrunk -> Modifier.fillMaxWidth().height(lx.u(3.2f)).clickable(role = Role.Button, onClickLabel = stringResource(R.string.hint_back_to_window)) { onCollapse() }
                 termMode || webMode -> Modifier.fillMaxWidth().weight(1f)
                 else -> Modifier.fillMaxWidth().heightIn(max = lx.u(22f))
-            }
+            }.semantics { contentDescription = pictureName; if (!shrunk && !webMode) customActions = pictureActions }
             DesktopCanvas(
                 app = app, prefs = prefs, ready = ready, agentSession = agentSession, termMode = termMode,
-                webPage = webPage, webMode = webMode, onWebTitle = onWebTitle, compact = shrunk,
+                webPage = webPage, webMode = webMode, web = web, onWebTitle = onWebTitle, compact = shrunk,
+                zoomRequest = zoomRequest,
                 modifier = surfaceModifier,
             )
             if (!shrunk && !termMode && !webMode) {
@@ -342,10 +368,14 @@ private fun CanvasCard(
             }
             if (!shrunk) {
                 Spacer(Modifier.height(lx.u(0.4f)))
-                val (text, tone) = notice ?: when {
-                    !linkUp -> stringResource(R.string.not_linked) to StatusTone.Info
+                val offDisplays = desk.outputs.filter { o -> desk.workspaces.none { it.output == o.name } }
+                val sOff = stringResource(R.string.display_off)
+                val (text, tone) = when {
+                    notice != null -> notice
+                    webMode && web.failure != null -> stringResource(R.string.page_did_not_load) to StatusTone.Error
+                    webMode && signedOutNote -> stringResource(R.string.signed_out_here) to StatusTone.Warn
                     !prefs.mirrorOn && !termMode && !webMode -> stringResource(R.string.paused_status) to StatusTone.Info
-                    else -> (stringResource(R.string.linked) + " · " + desk.outputs.joinToString(" · ") { Names.display(it.name, desk.outputs) }) to StatusTone.Ok
+                    else -> (stringResource(R.string.linked) + offDisplays.joinToString("") { " · " + sOff.format(Names.display(it.name, desk.outputs).lowercase()) }) to StatusTone.Ok
                 }
                 LxStatus(text, tone)
             }
@@ -360,26 +390,29 @@ private fun CanvasCard(
                 )
             }
         } else null,
-        // Shrunk under a sheet, the card is its band and a sliver of picture: no bottom band.
         bottom = if (shrunk) null else {
             {
-            LxButton("?", contentDescription = stringResource(R.string.gestures), pressed = sheet == Sheet.Gestures) { onSheet(Sheet.Gestures) }
-            LxHints(if (closeArm.armed) listOf(Hint(stringResource(R.string.hint_tap), stringResource(R.string.tap_again_to_close))) else hints)
-            LxButton(
-                stringResource(R.string.close), ButtonKind.Danger,
-                enabled = ready && focused != null, armed = closeArm.armed,
-            ) {
-                if (closeArm.press()) focused?.let { Link.act("CloseWindow", "id" to it.id) }
-            }
+                LxButton("?", contentDescription = stringResource(R.string.gestures), pressed = sheet == Sheet.Gestures) { onSheet(Sheet.Gestures) }
+                LxHints(listOfNotNull(hint))
+                if (webMode && webPage != null) {
+                    LxButton(null, icon = Icons.Filled.Refresh, contentDescription = stringResource(R.string.reload)) { web.reload() }
+                    LxButton(null, icon = Icons.Filled.DesktopWindows, contentDescription = stringResource(R.string.open_on_desktop)) {
+                        Link.act("Spawn", "command" to org.json.JSONArray(listOf("xdg-open", web.current.ifBlank { webPage.url })))
+                    }
+                }
+                LxButton(
+                    stringResource(R.string.close), ButtonKind.Danger,
+                    enabled = ready && focused != null, armed = closeArm.armed,
+                    contentDescription = stringResource(R.string.close_x, title),
+                ) {
+                    if (closeArm.press()) focused?.let { Link.act("CloseWindow", "id" to it.id) }
+                }
             }
         },
     )
 }
 
-/**
- * The other windows on this workspace, as rows: the visible twin of the swipe,
- * with the desktop's own state markers. The focused one is the current row.
- */
+/** The other windows on this workspace, as rows: the visible twin of the swipe. */
 @Composable
 private fun WindowList(desk: Link.Desk, ws: Link.Workspace?, prefs: CanvasPrefs, enabled: Boolean, modifier: Modifier = Modifier) {
     val windows = when {
@@ -387,13 +420,13 @@ private fun WindowList(desk: Link.Desk, ws: Link.Workspace?, prefs: CanvasPrefs,
         ws != null -> desk.windowsOn(ws.id)
         else -> desk.windows
     }
+    val listName = stringResource(R.string.windows)
     Column(modifier) {
-        LxSection(
-            stringResource(R.string.windows),
-            badge = listOfNotNull(Names.workspace(ws), windows.size.toString()).joinToString(" · "),
-            here = true,
-        )
-        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+        LxSection(listName, badge = listOfNotNull(Names.workspace(ws), windows.size.toString()).joinToString(" · "), here = true)
+        Column(
+            Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
+                .semantics { contentDescription = listName; collectionInfo = CollectionInfo(windows.size, 1) },
+        ) {
             windows.forEachIndexed { i, w ->
                 if (i > 0) LxDivider()
                 val kind = Names.windowKind(w)
@@ -406,61 +439,26 @@ private fun WindowList(desk: Link.Desk, ws: Link.Workspace?, prefs: CanvasPrefs,
                         w.app.startsWith(AGENT_APP_PREFIX) -> Marker.Background
                         else -> Marker.Idle
                     },
-                    current = w.focused,
-                    dim = !w.visible,
-                    enabled = enabled,
-                    onClick = {
-                        if (!w.visible) Link.act("ShowWindow", "id" to w.id)
-                        Link.act("FocusWindow", "id" to w.id)
-                    },
-                )
+                    current = w.focused, dim = !w.visible, enabled = enabled,
+                ) {
+                    if (!w.visible) Link.act("ShowWindow", "id" to w.id)
+                    Link.act("FocusWindow", "id" to w.id)
+                }
             }
         }
     }
 }
 
-/**
- * Say: the mic. Replaces the rail's dictate entry; the result comes back out
- * of band on `Link.dict` and lands on the canvas card's status line.
- */
+/** Before pairing (frame A): one card, one job — and the code dialog over it (A2). */
 @Composable
-private fun SayButton(ready: Boolean) {
+private fun FirstRunCard(app: AppState, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
-    val active by DictationService.active.collectAsState()
-    val level by DictationService.level.collectAsState()
-    val dict by Link.dict.collectAsState()
-    val transcribing = dict is Link.DictState.Transcribing
-    var granted by remember {
-        mutableStateOf(ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
-    }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        granted = ok
-        if (ok) DictationService.toggle(ctx)
-    }
-    // The mic level breathes the button while a take is open — the one live
-    // thing on the band, and only while recording. animateFloatAsState, never
-    // a LaunchedEffect keyed on `level`: that would restart a tween on every
-    // 100 ms frame and never finish one.
-    val pulse by animateFloatAsState(if (active) 1f + (level.coerceIn(0f, 1f) * 0.18f) else 1f, tween(120), label = "micLevel")
-    LxButton(
-        null,
-        kind = if (active) ButtonKind.Danger else ButtonKind.Quiet,
-        icon = if (active) Icons.Filled.Stop else Icons.Filled.Mic,
-        pressed = transcribing,
-        armed = active,
-        enabled = ready || active,
-        contentDescription = stringResource(R.string.say),
-        modifier = Modifier.scale(pulse),
-    ) {
-        Interaction.touch()
-        if (!granted) ask.launch(Manifest.permission.RECORD_AUDIO) else DictationService.toggle(ctx)
-    }
-}
-
-/** Before pairing: the one card, and the one job. */
-@Composable
-private fun FirstRunCard(modifier: Modifier = Modifier, onTypeCode: () -> Unit) {
-    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val lx = LxTheme.current
+    val pairing = rememberPairingState()
+    val strings = rememberPairingStrings()
+    var typing by remember { mutableStateOf(false) }
+    BackHandler(enabled = typing) { typing = false }
     LxCard(
         modifier = modifier,
         active = true,
@@ -472,58 +470,122 @@ private fun FirstRunCard(modifier: Modifier = Modifier, onTypeCode: () -> Unit) 
         },
         tile = {
             Spacer(Modifier.weight(1f))
-            LxEmptyState(
-                headline = stringResource(R.string.pair_headline),
-                steps = listOf(stringResource(R.string.pair_step_1), stringResource(R.string.pair_step_2), stringResource(R.string.pair_step_3)),
-                footnote = stringResource(R.string.pair_footnote),
-            )
+            Box(Modifier.alpha(if (typing) 0.45f else 1f)) {
+                LxEmptyState(
+                    headline = stringResource(R.string.pair_headline),
+                    steps = listOf(stringResource(R.string.pair_step_1), stringResource(R.string.pair_step_2), stringResource(R.string.pair_step_3)),
+                    footnote = stringResource(R.string.pair_footnote),
+                )
+            }
+            if (typing) {
+                Spacer(Modifier.height(lx.u(0.8f)))
+                PairingDialog(app, pairing, enabled = !pairing.searching)
+            }
             Spacer(Modifier.weight(1f))
         },
         bottom = {
-            LxHints(listOf(Hint(stringResource(R.string.scan), stringResource(R.string.hint_scan))))
-            LxButton(stringResource(R.string.type_the_code), onClick = onTypeCode)
-            LxButton(stringResource(R.string.scan), ButtonKind.Primary, icon = Icons.Filled.QrCodeScanner) {
-                // The stock camera reads the desktop's QR and hands the
-                // lattice://pair link back to MainActivity.
-                runCatching { ctx.startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            if (typing) {
+                LxHints(listOf(Hint("◀", stringResource(R.string.back_to_scan))))
+                // connect appears once the code is complete, never dimmed before.
+                if (pairing.complete(app.psk)) LxButton(stringResource(R.string.connect), ButtonKind.Primary, enabled = !pairing.searching) {
+                    pairing.connect(ctx, app, scope, strings)
+                }
+            } else {
+                Spacer(Modifier.weight(1f))
+                LxButton(stringResource(R.string.type_the_code)) { typing = true }
+                LxButton(stringResource(R.string.scan), ButtonKind.Primary, icon = Icons.Filled.QrCodeScanner) { openScanner(ctx) }
             }
         },
     )
 }
 
-/** The gesture sheet: every gesture the surface answers, as rows. The `?` opens it. */
+/** Paired, not answering (frame L): keeps the desktop's name, retries on its own, offers More only. */
 @Composable
-private fun GesturesCard(termMode: Boolean, webMode: Boolean) {
-    val rows: List<Pair<String, String>> = when {
-        termMode -> listOf(
-            stringResource(R.string.g_drag_term) to stringResource(R.string.g_drag_term_t),
-            stringResource(R.string.g_tap_term) to stringResource(R.string.g_tap_term_t),
-            stringResource(R.string.g_pinch) to stringResource(R.string.g_pinch_term_t),
-            stringResource(R.string.g_swipe) to stringResource(R.string.g_swipe_mirror),
-        )
-        webMode -> listOf(
-            stringResource(R.string.g_tap) to "the page's own",
-            stringResource(R.string.g_pinch) to "the page's own",
-        )
-        else -> listOf(
-            stringResource(R.string.g_tap) to stringResource(R.string.g_tap_mirror),
-            stringResource(R.string.g_double) to stringResource(R.string.g_double_mirror),
-            stringResource(R.string.g_hold) to stringResource(R.string.g_hold_mirror),
-            stringResource(R.string.g_swipe) to stringResource(R.string.g_swipe_mirror),
-            stringResource(R.string.g_pinch) to stringResource(R.string.g_pinch_mirror),
-        )
+private fun LinkLostCard(app: AppState, since: Long, modifier: Modifier = Modifier, onMore: () -> Unit) {
+    val ctx = LocalContext.current
+    val host = Names.host(app.host)
+    val time = remember(since) { if (since > 0) DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(since)) else null }
+    LxCard(
+        modifier = modifier,
+        active = true,
+        top = {
+            Column(Modifier.weight(1f)) {
+                LxWordmark(host)
+                LxCaption(time?.let { stringResource(R.string.not_answering_since, it) } ?: stringResource(R.string.not_answering))
+            }
+            LxButton(null, icon = Icons.Filled.Tune, contentDescription = stringResource(R.string.more), onClick = onMore)
+        },
+        tile = {
+            Spacer(Modifier.weight(1f))
+            LxEmptyState(
+                headline = stringResource(R.string.desktop_not_answering, host),
+                steps = listOf(stringResource(R.string.lost_step_1), stringResource(R.string.lost_step_2), stringResource(R.string.lost_step_3)),
+                footnote = stringResource(R.string.lost_footnote),
+            )
+            Spacer(Modifier.weight(1f))
+            LxStatus(time?.let { stringResource(R.string.last_answer, it) } ?: stringResource(R.string.not_answering), StatusTone.Warn)
+        },
+        bottom = {
+            Spacer(Modifier.weight(1f))
+            LxButton(stringResource(R.string.try_now), ButtonKind.Primary, icon = Icons.Filled.Refresh) {
+                // The beacon owns the control channel; bouncing it reconnects now.
+                if (MediaSessionListener.isAccessGranted(ctx)) { MediaSessionBeaconService.stop(ctx); MediaSessionBeaconService.start(ctx) }
+            }
+        },
+    )
+}
+
+/** The gesture sheet (frame N): every gesture, the cap in a gutter, and the tap that does the same. */
+@Composable
+private fun GesturesCard() {
+    val lx = LxTheme.current
+    @Composable fun G(cap: String, name: String, meta: String) {
+        LxRow(name, meta, trailing = null, marker = null, icon = null, modifier = Modifier)
     }
     LxCard(
         active = true,
-        top = { Column(Modifier.weight(1f)) { LxWordmark(stringResource(R.string.gestures_title)) } },
+        top = {
+            Column(Modifier.weight(1f)) {
+                LxWordmark(stringResource(R.string.gestures_title))
+                LxCaption(stringResource(R.string.gestures_caption))
+            }
+        },
         tile = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                rows.forEachIndexed { i, (k, v) ->
-                    if (i > 0) LxDivider()
-                    LxRow(name = k, meta = v)
-                }
+                LxSection(stringResource(R.string.on_the_picture), here = true)
+                GestureRow(stringResource(R.string.hint_tap), stringResource(R.string.g_click), stringResource(R.string.g_click_m))
+                GestureRow(stringResource(R.string.hint_hold), stringResource(R.string.g_right), stringResource(R.string.g_right_m))
+                GestureRow(stringResource(R.string.g_hold_move), stringResource(R.string.g_drag), stringResource(R.string.g_drag_m))
+                GestureRow(stringResource(R.string.hint_swipe), stringResource(R.string.g_next), stringResource(R.string.g_next_m))
+                GestureRow(stringResource(R.string.hint_pinch), stringResource(R.string.g_zoom), stringResource(R.string.g_zoom_m))
+                GestureRow(stringResource(R.string.g_swipe_title), stringResource(R.string.g_next), stringResource(R.string.g_next_web_m))
+                LxSectionGap()
+                LxSection(stringResource(R.string.on_a_terminal))
+                GestureRow(stringResource(R.string.hint_drag), stringResource(R.string.g_history), stringResource(R.string.g_history_m))
+                GestureRow(stringResource(R.string.hint_pinch), stringResource(R.string.g_text_size), stringResource(R.string.g_text_size_m))
             }
         },
         bottom = { LxHints(listOf(Hint("◀", stringResource(R.string.hint_back_to_window)))) },
     )
 }
+
+/** One gesture row: the cap in a fixed gutter, what it does, its tappable twin. */
+@Composable
+private fun GestureRow(cap: String, name: String, meta: String) {
+    val lx = LxTheme.current
+    androidx.compose.foundation.layout.Row(
+        Modifier.fillMaxWidth().heightIn(min = lx.tap).clip(RoundedCornerShape(lx.radiusRow))
+            .semantics { contentDescription = "$cap: $name, $meta" },
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(lx.u(0.6f)),
+    ) {
+        Box(Modifier.fillMaxWidth(0.26f)) { LxKey(cap, k = 0.75f) }
+        Column(Modifier.weight(1f)) {
+            com.lattice.app.lx.LxText(name, com.lattice.app.lx.Type.body.copy(weight = androidx.compose.ui.text.font.FontWeight.Normal))
+            com.lattice.app.lx.LxText(meta, com.lattice.app.lx.Type.caption, lx.ink(com.lattice.app.lx.Alpha.secondary), maxLines = 2)
+        }
+    }
+}
+
+private val Int.dp get() = androidx.compose.ui.unit.Dp(this.toFloat())
+@Suppress("unused") private val keepNotifications = Icons.Filled.Notifications
