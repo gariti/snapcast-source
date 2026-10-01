@@ -102,27 +102,27 @@ private fun MoreRoot(app: AppState, desk: Link.Desk, onPage: (MorePage?) -> Unit
 
                 LxSectionGap()
                 LxSection(stringResource(R.string.mirror_section))
-                LxRow(stringResource(R.string.frame_rate), stringResource(R.string.frame_rate_meta)) {
+                LxRow(stringResource(R.string.frame_rate), stringResource(R.string.frame_rate_meta), trailing = {
                     val fps = listOf(1, 2, 4, 8)
                     LxChip("${app.mirrorFps}", key = stringResource(R.string.fps), on = true) {
                         val next = fps[(fps.indexOf(app.mirrorFps).coerceAtLeast(0) + 1) % fps.size]
                         app.mirrorFps = next; app.onMirrorFpsChange(next)
                     }
-                }
+                })
                 LxDivider()
-                LxRow(stringResource(R.string.pause_when_idle), stringResource(R.string.pause_when_idle_meta)) {
+                LxRow(stringResource(R.string.pause_when_idle), stringResource(R.string.pause_when_idle_meta), trailing = {
                     val steps = listOf(30, 60, 300, 0)
                     LxChip(Names.seconds(app.mirrorIdleSeconds), on = app.mirrorIdleSeconds > 0) {
                         val next = steps[(steps.indexOf(app.mirrorIdleSeconds).coerceAtLeast(0) + 1) % steps.size]
                         app.mirrorIdleSeconds = next; app.onMirrorIdleChange(next)
                     }
-                }
+                })
                 LxDivider()
-                LxRow(stringResource(R.string.on_mobile_data), stringResource(R.string.on_mobile_data_meta)) {
+                LxRow(stringResource(R.string.on_mobile_data), stringResource(R.string.on_mobile_data_meta), trailing = {
                     LxChip(if (app.mirrorOnMetered) stringResource(R.string.on) else stringResource(R.string.off), on = app.mirrorOnMetered) {
                         app.mirrorOnMetered = !app.mirrorOnMetered; app.onMirrorOnMeteredChange(app.mirrorOnMetered)
                     }
-                }
+                })
 
                 LxSectionGap()
                 LxSection(stringResource(R.string.also))
@@ -328,23 +328,23 @@ private fun LinkPage(desk: Link.Desk) {
         top = { Column(Modifier.weight(1f)) { LxWordmark(stringResource(R.string.link_details)) } },
         tile = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                LxRow(stringResource(R.string.channel)) {
+                LxRow(stringResource(R.string.channel), trailing = {
                     Value(when (st) {
                         is ControlChannelClient.LinkState.Connected -> stringResource(R.string.up)
                         ControlChannelClient.LinkState.Connecting -> stringResource(R.string.connecting)
                         else -> stringResource(R.string.down)
                     })
-                }
+                })
                 LxDivider()
-                LxRow(stringResource(R.string.protocol)) { Value(conn?.proto?.toString() ?: "—") }
+                LxRow(stringResource(R.string.protocol), trailing = { Value(conn?.proto?.toString() ?: "—") })
                 LxDivider()
-                LxRow(stringResource(R.string.bridge)) { Value(if (bridge) stringResource(R.string.up) else stringResource(R.string.down)) }
+                LxRow(stringResource(R.string.bridge), trailing = { Value(if (bridge) stringResource(R.string.up) else stringResource(R.string.down)) })
                 LxDivider()
                 LxRow(stringResource(R.string.caps), conn?.caps?.sorted()?.joinToString(" · ") ?: "—")
                 LxDivider()
                 LxRow(stringResource(R.string.displays), desk.outputs.joinToString(" · ") { "${Names.display(it.name, desk.outputs)} (${it.name})" }.ifBlank { "—" })
                 LxDivider()
-                LxRow(stringResource(R.string.counts)) { Value("${desk.workspaces.size} · ${desk.windows.size}") }
+                LxRow(stringResource(R.string.counts), trailing = { Value("${desk.workspaces.size} · ${desk.windows.size}") })
             }
         },
         bottom = { LxHints(listOf(Hint("◀", stringResource(R.string.more_title)))) },
@@ -434,11 +434,12 @@ private fun SpeakersPage(app: AppState, snap: SnapcastState) {
                         c.name,
                         if (c.connected) c.streamId else stringResource(R.string.down),
                         icon = Icons.Filled.Speaker, dim = !c.connected,
-                    ) {
-                        LxChip(if (c.muted) stringResource(R.string.muted) else stringResource(R.string.audible), on = !c.muted, warn = c.muted) {
-                            snap.toggleMute(app.host, c, scope)
-                        }
-                    }
+                        trailing = {
+                            LxChip(if (c.muted) stringResource(R.string.muted) else stringResource(R.string.audible), on = !c.muted, warn = c.muted) {
+                                snap.toggleMute(app.host, c, scope)
+                            }
+                        },
+                    )
                     if (streams.size > 1) LxChips {
                         streams.forEach { sid -> LxChip(sid, on = sid == c.streamId) { snap.setStream(app.host, c, sid, scope) } }
                     }

@@ -79,12 +79,12 @@ fun EarsCard(app: AppState, ready: Boolean) {
                     if (ready) stringResource(R.string.listen_meta) else stringResource(R.string.listen_needs_link),
                     icon = Icons.Filled.Hearing,
                     enabled = ready || listening,
-                    onClick = { ListenService.set(ctx, !listening) },
-                ) {
-                    LxChip(if (listening) stringResource(R.string.on) else stringResource(R.string.off), on = listening, enabled = ready || listening) {
-                        ListenService.set(ctx, !listening)
-                    }
-                }
+                    trailing = {
+                        LxChip(if (listening) stringResource(R.string.on) else stringResource(R.string.off), on = listening, enabled = ready || listening) {
+                            ListenService.set(ctx, !listening)
+                        }
+                    },
+                ) { ListenService.set(ctx, !listening) }
                 if (needsBt) {
                     LxDivider()
                     LxRow(stringResource(R.string.allow_bluetooth), stringResource(R.string.allow_bluetooth_meta), icon = Icons.Filled.Bluetooth, chevron = true) {

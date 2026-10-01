@@ -291,9 +291,10 @@ fun LxRow(
     chevron: Boolean = false,
     warn: Boolean = false,
     enabled: Boolean = true,
-    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     trailing: (@Composable RowScope.() -> Unit)? = null,
+    // Last on purpose: a trailing lambda at a call site is the row's VERB.
+    onClick: (() -> Unit)? = null,
 ) {
     val lx = LxTheme.current
     val r = lx.roles
