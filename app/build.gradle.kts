@@ -12,8 +12,8 @@ android {
         applicationId = "com.lattice.app"
         minSdk = 29
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.1.0"
+        versionCode = 12
+        versionName = "1.1.1"
         // The gesture tests are the only way to put TWO fingers on this app:
         // a stock Pixel refuses `sendevent` to /dev/input/* from adb, and
         // `adb shell input` has never spoken multi-touch.

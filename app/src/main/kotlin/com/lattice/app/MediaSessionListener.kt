@@ -110,6 +110,10 @@ class MediaSessionListener : NotificationListenerService() {
         controllerCallbacks.clear()
     }
 
+    /** The track last published, and when (elapsedRealtime) it replaced another. */
+    private var lastTrackKey: String? = null
+    private var trackChangedAt = 0L
+
     private fun publishState(controllers: List<MediaController>) {
         val playing = controllers.any { c ->
             c.playbackState?.state == PlaybackState.STATE_PLAYING
@@ -155,8 +159,28 @@ class MediaSessionListener : NotificationListenerService() {
         val ps = active?.playbackState
         val activePlaying = ps?.state == PlaybackState.STATE_PLAYING
         val durMs = (md?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L).coerceAtLeast(0L)
-        val rawPos = ps?.position ?: 0L
-        val stamp = ps?.lastPositionUpdateTime ?: 0L
+        var rawPos = ps?.position ?: 0L
+        var stamp = ps?.lastPositionUpdateTime ?: 0L
+        // A position that predates the track it is reported for. Some players
+        // (Tidal casting to another device, seen 2026-11-11) swap the metadata
+        // on a track change and leave the PlaybackState of the PREVIOUS track
+        // standing for minutes: run forward, that position is past the new
+        // track's end, or simply wrong. When the state's stamp is older than
+        // the moment this listener saw the track change, the new track is
+        // taken to have started then, at 0 — which is what a track change is.
+        // The first track seen after connecting has no such moment, so its
+        // state is believed as it stands.
+        val now = SystemClock.elapsedRealtime()
+        val trackKey = "$app|$title|$artist|$durMs"
+        if (trackKey != lastTrackKey) {
+            trackChangedAt = if (lastTrackKey == null) 0L else now
+            lastTrackKey = trackKey
+        }
+        if (trackChangedAt > 0 && stamp > 0 && stamp < trackChangedAt - 500) {
+            Log.i(TAG, "position predates the track (state ${trackChangedAt - stamp} ms older); counting from the change")
+            rawPos = 0L
+            stamp = trackChangedAt
+        }
         val timing = PlaybackClock.Timing(
             playing = activePlaying,
             durMs = durMs,
