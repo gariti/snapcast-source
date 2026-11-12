@@ -89,7 +89,9 @@ class CommandUdpListener(
             when (cmd) {
                 CMD_PAUSE_CAPTURE -> AudioCaptureService.setPaused(true)
                 CMD_RESUME_CAPTURE -> AudioCaptureService.setPaused(false)
-                else -> MediaSessionListener.applyCommand(cmd, arg)
+                // A 1-byte arg cannot carry a position; seek is link-only.
+                MediaSessionListener.CMD_SEEK -> Log.w(TAG, "seek ignored on legacy UDP")
+                else -> MediaSessionListener.applyCommand(cmd, arg.toLong())
             }
         }
         Log.i(TAG, "command listener stopped")

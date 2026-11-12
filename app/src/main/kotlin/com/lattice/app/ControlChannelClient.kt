@@ -109,6 +109,8 @@ class ControlChannelClient(
     private var output: DataOutputStream? = null
     private var lastMedia: Pair<Boolean, Int>? = null
     private var lastNp: List<Any?>? = null
+    /** Timing of the last np frame SENT, at its send time; see [PlaybackClock]. */
+    private var lastNpTiming: PlaybackClock.Timing? = null
 
     /** Last resolved artwork, keyed by the URI it came from. */
     private var artCache: ArtCacheEntry? = null
@@ -165,7 +167,11 @@ class ControlChannelClient(
                 s.isPlaying, s.title, s.artist, s.app, s.artUri,
                 s.volumePercent, s.volumeControllable, s.volumeRemote,
             )
-            if (lastNp == key) return@withLock true
+            // Position as of NOW (the desktop stamps the frame on receipt).
+            val timing = (s.timing ?: NO_TIMING).let {
+                PlaybackClock.at(it, SystemClock.elapsedRealtime())
+            }
+            if (lastNp == key && !PlaybackClock.changed(lastNpTiming, timing)) return@withLock true
             val ok = writeFrameLocked(
                 mapOf(
                     "t" to "np",
@@ -180,9 +186,17 @@ class ControlChannelClient(
                     "vol" to s.volumePercent.coerceIn(0, 100).toLong(),
                     "ctl" to s.volumeControllable,
                     "remote" to s.volumeRemote,
+                    // Older daemons ignore these four keys.
+                    "dur" to timing.durMs,
+                    "pos" to timing.posMs,
+                    "spd" to timing.speed.toDouble(),
+                    "seek" to timing.canSeek,
                 )
             )
-            if (ok) lastNp = key
+            if (ok) {
+                lastNp = key
+                lastNpTiming = timing
+            }
             // Ship the bytes after the np frame so the desktop already knows which
             // key it is waiting for. Once per key per connection — the desktop
             // caches to disk, and a reconnect re-sends (cheap, and far simpler
@@ -455,6 +469,7 @@ class ControlChannelClient(
             output = session.output
             lastMedia = null
             lastNp = null
+            lastNpTiming = null
             // The desktop's art cache is per-run, and a fresh daemon has an empty
             // one — so treat every connection as needing the blob re-sent. The
             // artCache (URI -> bytes) survives; only the "already shipped" set
@@ -483,8 +498,10 @@ class ControlChannelClient(
             when (msg["t"]) {
                 "cmd" -> {
                     val cmd = (msg["cmd"] as? Long)?.toInt() ?: continue
-                    val arg = (msg["arg"] as? Long)?.toInt() ?: 0
-                    Log.d(TAG, "cmd=$cmd arg=$arg")
+                    // Full-width: seek's arg is a position in ms (hours of it).
+                    val arg = (msg["arg"] as? Long) ?: 0L
+                    if (cmd == MediaSessionListener.CMD_SEEK) Log.i(TAG, "cmd seek arg=$arg ms")
+                    else Log.d(TAG, "cmd=$cmd arg=$arg")
                     when (cmd) {
                         CMD_PAUSE_CAPTURE -> AudioCaptureService.setPaused(true)
                         CMD_RESUME_CAPTURE -> AudioCaptureService.setPaused(false)
@@ -641,6 +658,12 @@ class ControlChannelClient(
             "auth",
             // Agent requests: notify in, notifya out (AgentNotifications).
             "notify",
+            // np carries dur/pos/spd/seek; cmd opcode 9 seeks (arg = ms).
+            "seek",
+        )
+        /** Timing for "no session": not playing, nothing known. */
+        private val NO_TIMING = PlaybackClock.Timing(
+            playing = false, durMs = 0L, posMs = 0L, atMs = 0L, speed = 0f, canSeek = false,
         )
 
         /**

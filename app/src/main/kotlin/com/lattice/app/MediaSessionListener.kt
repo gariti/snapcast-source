@@ -8,6 +8,7 @@ import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.util.Log
@@ -149,7 +150,26 @@ class MediaSessionListener : NotificationListenerService() {
             pi.volumeControl != android.media.VolumeProvider.VOLUME_CONTROL_FIXED
         val percent = if (maxVol > 0) ((curVol * 100) / maxVol).coerceIn(0, 100) else 0
 
-        _state.value = State(
+        // Timing. PlaybackState's position is true at lastPositionUpdateTime
+        // (elapsedRealtime); a player that never stamps it gets "now".
+        val ps = active?.playbackState
+        val activePlaying = ps?.state == PlaybackState.STATE_PLAYING
+        val durMs = (md?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L).coerceAtLeast(0L)
+        val rawPos = ps?.position ?: 0L
+        val stamp = ps?.lastPositionUpdateTime ?: 0L
+        val timing = PlaybackClock.Timing(
+            playing = activePlaying,
+            durMs = durMs,
+            posMs = if (rawPos == PlaybackState.PLAYBACK_POSITION_UNKNOWN) 0L else rawPos.coerceAtLeast(0L),
+            atMs = if (stamp > 0) stamp else SystemClock.elapsedRealtime(),
+            // Speed only matters while playing; pinning it to 0 otherwise keeps
+            // a player that reports 0 or 1 when paused from looking like news.
+            speed = if (!activePlaying) 0f else ps?.playbackSpeed?.takeIf { it > 0f } ?: 1f,
+            canSeek = ps != null && durMs > 0 &&
+                (ps.actions and PlaybackState.ACTION_SEEK_TO) != 0L,
+        )
+
+        val next = State(
             isPlaying = playing,
             sessionCount = controllers.size,
             listenerConnected = true,
@@ -161,7 +181,19 @@ class MediaSessionListener : NotificationListenerService() {
             volumeMax = maxVol,
             volumeControllable = controllable,
             volumeRemote = isRemote,
+            timing = timing.takeIf { active != null },
         )
+        // A player that re-announces its state every second with a position
+        // that is exactly where the clock says it should be is not news: keep
+        // the previous anchor so the State stays equal and nothing downstream
+        // (the link loop, the UI) wakes up.
+        val prev = _state.value
+        val prevTiming = prev.timing
+        val nextTiming = next.timing
+        _state.value =
+            if (prevTiming != null && nextTiming != null && next.copy(timing = prevTiming) == prev &&
+                !PlaybackClock.changed(prevTiming, nextTiming)
+            ) prev else next
     }
 
     data class State(
@@ -176,6 +208,8 @@ class MediaSessionListener : NotificationListenerService() {
         val volumeMax: Int = 0,
         val volumeControllable: Boolean = false,
         val volumeRemote: Boolean = false,
+        /** Position/length/speed of the active session; null with no session. */
+        val timing: PlaybackClock.Timing? = null,
     )
 
     companion object {
@@ -188,6 +222,9 @@ class MediaSessionListener : NotificationListenerService() {
         const val CMD_PLAY_PAUSE = 4
         const val CMD_NEXT = 5
         const val CMD_PREV = 6
+        // 7/8 are pause/resume-capture, handled by ControlChannelClient.
+        /** Seek: arg = absolute position in ms. */
+        const val CMD_SEEK = 9
 
         // The controller representing current playback — the command target.
         // Updated on every publishState; cleared on disconnect.
@@ -202,7 +239,7 @@ class MediaSessionListener : NotificationListenerService() {
          * volume, which is exactly the KEF/Chromecast case. Posted to the main
          * looper since transport/volume calls expect a Looper thread.
          */
-        fun applyCommand(cmd: Int, arg: Int) {
+        fun applyCommand(cmd: Int, arg: Long) {
             val c = activeController ?: run {
                 Log.w(TAG, "command $cmd ignored — no active controller")
                 return
@@ -215,7 +252,7 @@ class MediaSessionListener : NotificationListenerService() {
                             val max = pi?.maxVolume ?: 0
                             if (max > 0) {
                                 // round(arg% * max)
-                                val target = (arg.coerceIn(0, 100) * max + 50) / 100
+                                val target = (arg.coerceIn(0L, 100L).toInt() * max + 50) / 100
                                 c.setVolumeTo(target, 0)
                             }
                         }
@@ -227,6 +264,11 @@ class MediaSessionListener : NotificationListenerService() {
                             else c.transportControls.play()
                         CMD_NEXT -> c.transportControls.skipToNext()
                         CMD_PREV -> c.transportControls.skipToPrevious()
+                        CMD_SEEK -> {
+                            val pos = arg.coerceAtLeast(0L)
+                            Log.i(TAG, "seek to $pos ms on ${c.packageName}")
+                            c.transportControls.seekTo(pos)
+                        }
                         else -> Log.w(TAG, "unknown command opcode $cmd")
                     }
                 } catch (e: Exception) {
